@@ -195,7 +195,7 @@ jobs:
                 "https://divested.dev/hosts-domains-wildcards" -o "$fallback"
             # Keep exact domains only: bloom-filter lookups cannot
             # interpret wildcard patterns.
-            grep -Ev '^[[:space:]]*(#|$|\\*\\.)' "$fallback" > "$output"
+            grep -Ev '^[[:space:]]*(#|$|\*\.)' "$fallback" > "$output"
           fi
 
           if [ "$(wc -l < "$output")" -lt 100 ]; then
