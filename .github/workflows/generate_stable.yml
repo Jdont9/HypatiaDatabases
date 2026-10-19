@@ -173,15 +173,36 @@ jobs:
           sed -i '1d' ${{ github.workspace }}/raw/targetedthreats.hdb;
           sed -i '1d' ${{ github.workspace }}/raw/targetedthreats.hsb;
 
-      - name: DATABASE PREPERATION - Divest Domains
+      - name: DATABASE PREPARATION - Divest Domains
+        shell: bash
         run: |
-          wget --tries=5 --waitretry=10 --retry-connrefused --timeout=60 \
-            --user-agent="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0" \
-            "https://divested.dev/hosts-domains" -O "${{ github.workspace }}/domains/divested.txt"
-          if [ "$(wc -l < "${{ github.workspace }}/domains/divested.txt")" -lt 100 ]; then
-            echo "Downloaded file looks too small, aborting" >&2; exit 1;
+          set -euo pipefail
+
+          output="${{ github.workspace }}/domains/divested.txt"
+          UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+
+          if curl --fail --location --silent --show-error \
+              --retry 3 --retry-all-errors --retry-delay 10 \
+              --user-agent "$UA" \
+              "https://divested.dev/hosts-domains" -o "$output"; then
+            echo "Downloaded primary Divest domains list."
+          else
+            echo "::warning::Primary Divest endpoint failed; trying fallback."
+            fallback="${{ github.workspace }}/domains/divested-fallback.txt"
+            curl --fail --location --silent --show-error \
+                --retry 3 --retry-all-errors --retry-delay 10 \
+                --user-agent "$UA" \
+                "https://divested.dev/hosts-domains-wildcards" -o "$fallback"
+            # Keep exact domains only: bloom-filter lookups cannot
+            # interpret wildcard patterns.
+            grep -Ev '^[[:space:]]*(#|$|\\*\\.)' "$fallback" > "$output"
           fi
 
+          if [ "$(wc -l < "$output")" -lt 100 ]; then
+            echo "::error::Divest domains list too small ($(wc -l < "$output") lines)" >&2
+            exit 1
+          fi
+          echo "Downloaded $(wc -l < "$output") domain entries."
       - name: GENERATE HYPATIA SIGNATURE DATABASES 
         run: |
           mvn -q -B --no-transfer-progress clean compile exec:java -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" -Dexec.args="${{ github.workspace }}/raw/ ${{ github.workspace }}/domains/divested.txt" > "${{ github.workspace }}/various/generation_report.txt"
