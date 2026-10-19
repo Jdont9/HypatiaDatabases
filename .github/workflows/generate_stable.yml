@@ -173,11 +173,12 @@ jobs:
           sed -i '1d' ${{ github.workspace }}/raw/targetedthreats.hdb;
           sed -i '1d' ${{ github.workspace }}/raw/targetedthreats.hsb;
 
-      - name: DATABASE PREPARATION - Divest Domains (best effort)
+      - name: DATABASE PREPARATION - Divest Domains (best effort, cache fallback)
         shell: bash
         continue-on-error: true
         run: |
           output="${{ github.workspace }}/domains/divested.txt"
+          cache="${{ github.workspace }}/divest.zip"
           UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
           headers=(-H "User-Agent: $UA"
                    -H "Accept: text/plain,text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"
@@ -197,7 +198,7 @@ jobs:
 
           ok=0
           if try_fetch "https://divested.dev/hosts-domains" "$output"; then
-            ok=1; echo "Downloaded primary Divest domains list."
+            ok=1; echo "Downloaded fresh Divest domains list."
           elif try_fetch "https://divested.dev/hosts-domains-wildcards" /tmp/divest-wc.txt; then
             grep -Ev "^[[:space:]]*(#|$|\*\.)" /tmp/divest-wc.txt > "$output" || true
             if [ -s "$output" ]; then ok=1; echo "::warning::Primary endpoint failed; used wildcards list."; fi
@@ -207,11 +208,27 @@ jobs:
           fi
 
           if [ "$ok" != 1 ]; then
-            echo "::warning::All divested.dev endpoints failed, continuing without this source. HTTP results: ${observed}"
+            if [ -f "$cache" ]; then
+              rm -rf /tmp/divest-cache && mkdir -p /tmp/divest-cache
+              if unzip -o -q "$cache" -d /tmp/divest-cache; then
+                # Use the largest extracted file as the cached list
+                cached=$(find /tmp/divest-cache -type f -printf "%s %p\n" | sort -rn | head -1 | cut -d" " -f2-)
+                if [ -n "$cached" ]; then
+                  grep -Ev "^[[:space:]]*(#|$|\*\.)" "$cached" | sort -u > "$output" || true
+                  if [ -s "$output" ]; then
+                    ok=1
+                    echo "::warning::divested.dev unreachable (${observed}) — using cached divest.zip ($(basename "$cached"), updated $(date -u -r "$cache" +"%Y-%m-%d"))."
+                  fi
+                fi
+              fi
+            fi
+          fi
+
+          if [ "$ok" != 1 ]; then
+            echo "::warning::All divested.dev endpoints failed and no usable cache — continuing without this source. HTTP results: ${observed}"
             : > "$output"
           fi
           echo "Divest domains file: $(wc -l < "$output") lines."
-
       - name: DATABASE PREPARATION - Zimperium IOC
         continue-on-error: true
         run: |
