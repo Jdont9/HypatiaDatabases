@@ -321,8 +321,32 @@ jobs:
           cp "${{ github.workspace }}/various/generation_report.html" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/various/database_generation_ci.txt" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/static/template.html" "${{ github.workspace }}/deploy"
+          # index.html so the Pages root URL does not 404
+          cp "${{ github.workspace }}/static/template.html" "${{ github.workspace }}/deploy/index.html"
 
           date > "${{ github.workspace }}/deploy/generation_time.html"
+
+      - name: Sign databases (if GPG_PRIVATE_KEY secret is set)
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          deploy="${{ github.workspace }}/deploy"
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "Importing signing key from secret..."
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}' | cut -c25-40)
+            for f in "$deploy"/hypatia-*-bloom.bin; do
+              gpg --batch --yes --detach-sign --armor --local-user "$keyid" --output "$f.sig" "$f"
+            done
+            gpg --batch --armor --export "$keyid" > "$deploy/gpg.key"
+            echo "Signed databases with key $keyid"
+            echo "SIGNING_KEY_FOR_APP=$keyid" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::GPG_PRIVATE_KEY secret not set — deploying with repo gpg.key and pre-existing .sig files. Hypatia will REJECT these databases unless the signatures match."
+            cp "${{ github.workspace }}/gpg.key" "$deploy/" || true
+            cp "${{ github.workspace }}"/*.bin.sig "$deploy/" 2>/dev/null || true
+          fi
       
       - name: Deploy to unsigned branch
         uses: peaceiris/actions-gh-pages@v4
