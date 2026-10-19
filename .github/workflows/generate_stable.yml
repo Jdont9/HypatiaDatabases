@@ -207,17 +207,54 @@ jobs:
             if [ -s "$output" ]; then ok=1; echo "::warning::Domain endpoints failed; extracted domains from hosts list."; fi
           fi
 
-          if [ "$ok" != 1 ]; then
-            if [ -f "$cache" ]; then
-              rm -rf /tmp/divest-cache && mkdir -p /tmp/divest-cache
-              if unzip -o -q "$cache" -d /tmp/divest-cache; then
-                # Use the largest extracted file as the cached list
-                cached=$(find /tmp/divest-cache -type f -printf "%s %p\n" | sort -rn | head -1 | cut -d" " -f2-)
+          # Fallback: cached divest.zip (may contain divest.mhtml or a plain text list)
+          extract_from_mhtml() {
+            # Decodes an MHTML page (quoted-printable, MIME) and keeps only domain-like lines
+            python3 - "$1" <<'PYEOF'
+          import email, re, sys
+          with open(sys.argv[1], "rb") as f:
+              msg = email.message_from_binary_file(f)
+          payloads = []
+          if msg.is_multipart():
+              for part in msg.walk():
+                  if part.get_content_type() in ("text/plain", "text/html"):
+                      payloads.append(part.get_payload(decode=True) or b"")
+          else:
+              payloads.append(msg.get_payload(decode=True) or b"")
+          text = "\n".join(p.decode("utf-8", "replace") for p in payloads)
+          text = re.sub(r"<[^>]+>", "\n", text)  # split HTML tags onto lines
+          seen, out = set(), []
+          for line in text.splitlines():
+              line = line.strip().lower()
+              if line.startswith("#") or line.startswith("*.") or line == "":
+                  continue
+              # one domain per line, tolerate trailing junk after whitespace
+              m = re.match(r"^(?!-)[a-z0-9-]{1,63}(\.[a-z0-9_-]+)+(\.[a-z]{2,})?$", line.split()[0])
+              if m and m.group(0) not in seen:
+                  seen.add(m.group(0))
+                  out.append(m.group(0))
+          print("\n".join(out))
+          PYEOF
+          }
+
+          if [ "$ok" != 1 ] && [ -f "$cache" ]; then
+            rm -rf /tmp/divest-cache && mkdir -p /tmp/divest-cache
+            if unzip -o -q "$cache" -d /tmp/divest-cache; then
+              mhtml=$(find /tmp/divest-cache -iname "*.mhtml" -o -iname "*.mht" | head -1)
+              if [ -n "$mhtml" ]; then
+                extract_from_mhtml "$mhtml" > "$output"
+                if [ -s "$output" ]; then
+                  ok=1
+                  echo "::warning::divested.dev unreachable (${observed}) — using cached divest.zip ($(basename "$mhtml"), $(wc -l < "$output") domains, cache dated $(date -u -r "$cache" +"%Y-%m-%d"))."
+                fi
+              else
+                # No MHTML: fall back to largest plain text file in the archive
+                cached=$(find /tmp/divest-cache -type f -name "*.txt" -printf "%s %p\n" | sort -rn | head -1 | cut -d" " -f2-)
                 if [ -n "$cached" ]; then
                   grep -Ev "^[[:space:]]*(#|$|\*\.)" "$cached" | sort -u > "$output" || true
                   if [ -s "$output" ]; then
                     ok=1
-                    echo "::warning::divested.dev unreachable (${observed}) — using cached divest.zip ($(basename "$cached"), updated $(date -u -r "$cache" +"%Y-%m-%d"))."
+                    echo "::warning::divested.dev unreachable (${observed}) — using cached divest.zip ($(basename "$cached"), cache dated $(date -u -r "$cache" +"%Y-%m-%d"))."
                   fi
                 fi
               fi
