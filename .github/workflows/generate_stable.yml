@@ -176,33 +176,54 @@ jobs:
       - name: DATABASE PREPARATION - Divest Domains
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           output="${{ github.workspace }}/domains/divested.txt"
           UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+          headers=(-H "User-Agent: $UA"
+                   -H "Accept: text/plain,text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"
+                   -H "Accept-Language: en-US,en;q=0.5"
+                   -H "Accept-Encoding: identity"
+                   -H "Connection: keep-alive")
+          observed=""
 
-          if curl --fail --location --silent --show-error \
-              --retry 3 --retry-all-errors --retry-delay 10 \
-              --user-agent "$UA" \
-              "https://divested.dev/hosts-domains" -o "$output"; then
-            echo "Downloaded primary Divest domains list."
-          else
-            echo "::warning::Primary Divest endpoint failed; trying fallback."
-            fallback="${{ github.workspace }}/domains/divested-fallback.txt"
-            curl --fail --location --silent --show-error \
-                --retry 3 --retry-all-errors --retry-delay 10 \
-                --user-agent "$UA" \
-                "https://divested.dev/hosts-domains-wildcards" -o "$fallback"
-            # Keep exact domains only: bloom-filter lookups cannot
-            # interpret wildcard patterns.
-            grep -Ev '^[[:space:]]*(#|$|\*\.)' "$fallback" > "$output"
+          try_fetch() {
+            local url="$1" dest="$2" code
+            code=$(curl -sS -L -o "$dest" -w "%{http_code}" --max-time 120 \
+              --retry 2 --retry-all-errors "${headers[@]}" "$url" 2>&1) || true
+            observed="${observed}[${url} => ${code}] "
+            [ -s "$dest" ] || return 1
+            head -c 200 "$dest" | grep -qi "<!DOCTYPE\|<html" && return 1
+            return 0
+          }
+
+          ok=0
+          if try_fetch "https://divested.dev/hosts-domains" "$output"; then
+            ok=1; echo "Downloaded primary Divest domains list."
+          elif try_fetch "https://divested.dev/hosts-domains-wildcards" /tmp/divest-wc.txt; then
+            grep -Ev "^[[:space:]]*(#|$|\*\.)" /tmp/divest-wc.txt > "$output" || true
+            if [ -s "$output" ]; then
+              ok=1; echo "::warning::Primary endpoint failed; used wildcards list (exact domains only)."
+            fi
+          elif try_fetch "https://divested.dev/hosts" /tmp/divest-hosts.txt; then
+            awk '$1 !~ /^#/ && ($1=="0.0.0.0" || $1=="127.0.0.1") {print $2}
+                 $2 !~ /^#/ && ($2=="0.0.0.0" || $2=="127.0.0.1") {print $1}' /tmp/divest-hosts.txt | sort -u > "$output" || true
+            if [ -s "$output" ]; then
+              ok=1; echo "::warning::Domain endpoints failed; extracted domains from hosts list."
+            fi
           fi
 
-          if [ "$(wc -l < "$output")" -lt 100 ]; then
-            echo "::error::Divest domains list too small ($(wc -l < "$output") lines)" >&2
+          if [ "$ok" != 1 ]; then
+            echo "::error::All divested.dev endpoints failed. HTTP results: ${observed}"
             exit 1
           fi
-          echo "Downloaded $(wc -l < "$output") domain entries."
+
+          lines=$(wc -l < "$output")
+          if [ "$lines" -lt 100 ]; then
+            echo "::error::Divest domains list too small ($lines lines). HTTP results: ${observed}"
+            exit 1
+          fi
+          echo "Downloaded $lines domain entries."
       - name: GENERATE HYPATIA SIGNATURE DATABASES 
         run: |
           mvn -q -B --no-transfer-progress clean compile exec:java -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" -Dexec.args="${{ github.workspace }}/raw/ ${{ github.workspace }}/domains/divested.txt" > "${{ github.workspace }}/various/generation_report.txt"
