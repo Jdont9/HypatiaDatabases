@@ -174,7 +174,13 @@ jobs:
           sed -i '1d' ${{ github.workspace }}/raw/targetedthreats.hsb;
 
       - name: DATABASE PREPERATION - Divest Domains
-        run: wget "divested.dev/hosts-domains" -O "${{ github.workspace }}/domains/divested.txt"
+        run: |
+          wget --tries=5 --waitretry=10 --retry-connrefused --timeout=60 \
+            --user-agent="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0" \
+            "https://divested.dev/hosts-domains" -O "${{ github.workspace }}/domains/divested.txt"
+          if [ "$(wc -l < "${{ github.workspace }}/domains/divested.txt")" -lt 100 ]; then
+            echo "Downloaded file looks too small, aborting" >&2; exit 1;
+          fi
 
       - name: GENERATE HYPATIA SIGNATURE DATABASES 
         run: |
