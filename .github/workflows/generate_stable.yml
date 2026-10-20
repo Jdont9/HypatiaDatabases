@@ -183,6 +183,15 @@ jobs:
           ok=0
           if try_fetch "https://divested.dev/hosts-domains" "$output"; then
             ok=1; echo "Downloaded fresh Divest domains list."
+            # Fresh download succeeded: also refresh the divest.zip cache
+            # in the repo so the fallback stays current.
+            rm -rf /tmp/divest-refresh && mkdir -p /tmp/divest-refresh
+            cp "$output" /tmp/divest-refresh/divested.txt
+            (cd /tmp/divest-refresh && zip -q -r divest.zip divested.txt)
+            mkdir -p "${{ github.workspace }}/cache-new"
+            cp /tmp/divest-refresh/divest.zip "${{ github.workspace }}/cache-new/divest.zip"
+            echo "DIVEST_CACHE_UPDATED=1" >> "$GITHUB_ENV"
+          fi
           elif try_fetch "https://divested.dev/hosts-domains-wildcards" /tmp/divest-wc.txt; then
             grep -Ev "^[[:space:]]*(#|$|\*\.)" /tmp/divest-wc.txt > "$output" || true
             if [ -s "$output" ]; then ok=1; echo "::warning::Primary endpoint failed; used wildcards list."; fi
@@ -353,3 +362,17 @@ jobs:
           force_orphan: false
           keep_files: true
           publish_branch: unsigned
+
+      - name: Commit refreshed divest.zip cache
+        if: env.DIVEST_CACHE_UPDATED == '1'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          cp "${{ github.workspace }}/cache-new/divest.zip" "${{ github.workspace }}/divest.zip"
+          git add divest.zip
+          git commit -m "Refresh divest.zip cache from divested.dev [skip ci]" || exit 0
+          git push origin main
+
