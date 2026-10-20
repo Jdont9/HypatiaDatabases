@@ -348,5 +348,8 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: "${{ github.workspace }}/deploy"
-          force_orphan: true
+          # force_orphan must stay false: the unsigned branch also hosts the
+          # extended md5 database deployed by generate_extended.yml
+          force_orphan: false
+          keep_files: true
           publish_branch: unsigned

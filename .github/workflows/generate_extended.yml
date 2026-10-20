@@ -1,0 +1,158 @@
+name: Generate Extended MD5 Database
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions: write-all
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency Setup
+        run: |
+          sudo apt-get update -y
+          sudo apt install maven unzip git dos2unix -y
+
+      - name: Start ClamAV daemon clamd
+        uses: toblux/start-clamd-github-action@v0.2.1
+        with:
+          db_main: true
+          db_daily: true
+
+      # The generator enables extended mode when args[0] contains "-extended",
+      # and dedupes against production/hypatia-md5-bloom.bin (the CURRENT
+      # standard md5 database). The output is therefore a DELTA of new md5
+      # signatures, which Hypatia adds on top of the standard md5 database.
+      - name: Organize Directories
+        run: |
+          mkdir -p "${{ github.workspace }}/raw-extended/"
+          mkdir -p "${{ github.workspace }}/exclusions/"
+          mkdir -p "${{ github.workspace }}/production/"
+          mkdir -p "${{ github.workspace }}/various/"
+
+      - name: Fetch current standard MD5 database (dedupe base)
+        run: |
+          wget -q "https://raw.githubusercontent.com/Jdont9/HypatiaDatabases/unsigned/hypatia-md5-bloom.bin" \
+            -O "${{ github.workspace }}/production/hypatia-md5-bloom.bin"
+          test -s "${{ github.workspace }}/production/hypatia-md5-bloom.bin" || { echo "::error::Could not fetch standard md5 database"; exit 1; }
+
+      - name: DATABASE PREPARATION - ClamAV (exclusions + md5)
+        run: |
+          mkdir /tmp/mss
+          cd /tmp/mss
+          cp /var/lib/clamav/main.c*d .
+          cp /var/lib/clamav/daily.c*d .
+          sigtool -u main.c*d
+          sigtool -u daily.c*d
+          mv /tmp/mss/*.fp* "${{ github.workspace }}/exclusions/"
+          cp /tmp/mss/*.hdb "${{ github.workspace }}/raw-extended/"
+
+      - name: DATABASE PREPARATION - ESET (md5)
+        continue-on-error: true
+        run: |
+          git clone https://github.com/eset/malware-ioc "${{ github.workspace }}/various/eset-sources/"
+          find "${{ github.workspace }}/various/eset-sources/" -maxdepth 3 -mindepth 2 -name "samples.md5" -exec cat {} + \
+            >> "${{ github.workspace }}/various/eset.md5"
+          sort -u -o "${{ github.workspace }}/raw-extended/eset.md5" "${{ github.workspace }}/various/eset.md5"
+
+      - name: DATABASE PREPARATION - ThreatView (md5)
+        continue-on-error: true
+        run: |
+          wget "https://threatview.io/Downloads/MD5-HASH-ALL.txt" -O - | sed 's/MD5 of //' >> "${{ github.workspace }}/various/threatview.md5"
+          sort -u -o "${{ github.workspace }}/raw-extended/threatview.md5" "${{ github.workspace }}/various/threatview.md5"
+
+      - name: DATABASE PREPARATION - Targeted Threats (md5)
+        continue-on-error: true
+        run: |
+          git clone https://github.com/botherder/targetedthreats.git "${{ github.workspace }}/various/targetedthreats/"
+          while IFS=, read -r col1MD5 col2SHA256 col3Family col4Actor col5Country col6Report
+          do
+            col1MD5=$(sed -e 's/^"//' -e 's/"$//' <<< "$col1MD5");
+            if [ -n "$col1MD5" ]; then echo "$col1MD5:0:targetedthreats" >> "${{ github.workspace }}/raw-extended/targetedthreats.hdb"; fi;
+          done < "${{ github.workspace }}/various/targetedthreats/samples.csv"
+          sed -i '1d' "${{ github.workspace }}/raw-extended/targetedthreats.hdb"
+
+      - name: DATABASE PREPARATION - Sanesecurity (md5)
+        continue-on-error: true
+        run: |
+          mkdir -p "${{ github.workspace }}/various/sanesecurity-real/"
+          cd "${{ github.workspace }}/various/sanesecurity-real/"
+          rsync -av rsync://rsync.sanesecurity.net/sanesecurity .
+          for f in *.hdb; do
+            echo "" >> "${{ github.workspace }}/raw-extended/sanesecurity-$f";
+            cat "$f" >> "${{ github.workspace }}/raw-extended/sanesecurity-$f";
+            sort -u -o "${{ github.workspace }}/raw-extended/sanesecurity-$f" "${{ github.workspace }}/raw-extended/sanesecurity-$f";
+          done
+
+      # Issue #7 "extras": scafroglia93 blocklists (md5 lists)
+      - name: DATABASE PREPARATION - Scafroglia93 Blocklists (extras)
+        continue-on-error: true
+        run: |
+          git clone --depth 1 https://github.com/scafroglia93/blocklists.git "${{ github.workspace }}/various/scafroglia/"
+          for f in "${{ github.workspace }}/various/scafroglia/"blocklists-*.txt; do
+            grep -E '^[a-fA-F0-9]{32}$' "$f" >> "${{ github.workspace }}/various/scafroglia-all.md5" || true;
+          done
+          if [ -s "${{ github.workspace }}/various/scafroglia-all.md5" ]; then
+            sort -u -o "${{ github.workspace }}/raw-extended/scafroglia.md5" "${{ github.workspace }}/various/scafroglia-all.md5"
+            echo "Scafroglia: $(wc -l < "${{ github.workspace }}/raw-extended/scafroglia.md5") md5 signatures."
+          else
+            echo "::warning::No md5 hashes found in scafroglia93/blocklists"
+          fi
+
+      - name: GENERATE EXTENDED HYPATIA MD5 DATABASE
+        run: |
+          mvn -q -B --no-transfer-progress clean compile exec:java \
+            -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" \
+            -Dexec.args="${{ github.workspace }}/raw-extended/" \
+            > "${{ github.workspace }}/various/generation_report_extended.txt"
+          cat "${{ github.workspace }}/various/generation_report_extended.txt"
+
+      - name: Select files to use
+        run: |
+          mkdir -p "${{ github.workspace }}/deploy"
+          cp "${{ github.workspace }}/raw-extended/hypatia-md5-bloom.bin" "${{ github.workspace }}/deploy/hypatia-md5-extended-bloom.bin"
+          cp "${{ github.workspace }}/various/generation_report_extended.txt" "${{ github.workspace }}/deploy"
+
+      - name: Sign extended database
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          deploy="${{ github.workspace }}/deploy"
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            export GNUPGHOME="$(mktemp -d)"
+            chmod 700 "$GNUPGHOME"
+            echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
+            keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+            f="$deploy/hypatia-md5-extended-bloom.bin"
+            # .sig MUST be binary (no --armor): Hypatia's PGPObjectFactory
+            # cannot decode armored signatures.
+            gpg --batch --yes --pinentry-mode loopback \
+                --passphrase "$GPG_PASSPHRASE" \
+                --detach-sign --local-user "$keyid" \
+                --output "$f.sig" "$f"
+            echo "Signed extended database with key $keyid"
+          else
+            echo "::error::GPG_PRIVATE_KEY secret not set — cannot deploy a valid extended database."
+            exit 1
+          fi
+
+      # force_orphan MUST stay false: this branch also hosts the stable
+      # databases deployed by generate_stable.yml.
+      - name: Deploy to unsigned branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: "${{ github.workspace }}/deploy"
+          force_orphan: false
+          publish_branch: unsigned
+          keep_files: true
+          commit_message: "Deploy extended md5 database"
