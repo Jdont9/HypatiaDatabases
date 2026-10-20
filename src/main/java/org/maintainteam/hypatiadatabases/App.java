@@ -71,7 +71,11 @@ public class App {
         //isFileInNsrl("B61905308B336AD268A782790B661616");
         int amtMaxMD5 = 7600000; //7.6m
         if (extendedMode) {
-            amtMaxMD5 = 52000000; //52m
+            //The extended database is a DELTA (deduped against the current
+            //standard md5 database), so it stays small. A 52m-capacity bloom
+            //is a fixed ~148MB file, which exceeds GitHub's 100MB file limit.
+            //5m entries at 1e-5 fpp gives a ~15MB file.
+            amtMaxMD5 = 5000000; //5m
         }
         int amtMaxSHA1 = 100000; //100k
         int amtMaxSHA256 = 2200000; //2.2m
