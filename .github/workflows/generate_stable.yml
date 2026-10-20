@@ -191,7 +191,6 @@ jobs:
             mkdir -p "${{ github.workspace }}/cache-new"
             cp /tmp/divest-refresh/divest.zip "${{ github.workspace }}/cache-new/divest.zip"
             echo "DIVEST_CACHE_UPDATED=1" >> "$GITHUB_ENV"
-          fi
           elif try_fetch "https://divested.dev/hosts-domains-wildcards" /tmp/divest-wc.txt; then
             grep -Ev "^[[:space:]]*(#|$|\*\.)" /tmp/divest-wc.txt > "$output" || true
             if [ -s "$output" ]; then ok=1; echo "::warning::Primary endpoint failed; used wildcards list."; fi
