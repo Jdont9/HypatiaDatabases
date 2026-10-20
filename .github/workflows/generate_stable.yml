@@ -324,9 +324,11 @@ jobs:
             keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
 
             for f in "$deploy"/hypatia-*-bloom.bin; do
+              # NB: .sig MUST be binary (no --armor): Hypatia parses it
+              # with PGPObjectFactory, which cannot decode armored input.
               gpg --batch --yes --pinentry-mode loopback \
                   --passphrase "$GPG_PASSPHRASE" \
-                  --detach-sign --armor \
+                  --detach-sign \
                   --local-user "$keyid" \
                   --output "$f.sig" "$f"
             done
