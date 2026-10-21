@@ -283,9 +283,10 @@ jobs:
           git clone --depth 1 https://github.com/avast/ioc "${{ github.workspace }}/various/avast-ioc/"
           avastdir="${{ github.workspace }}/various/avast-ioc"
           # --- hashes ---
-          find "$avastdir" -type f -name "samples.md5" -exec cat {} + > "${{ github.workspace }}/various/avast.md5" || true
-          find "$avastdir" -type f -name "samples.sha1" -exec cat {} + > "${{ github.workspace }}/various/avast.sha1" || true
-          find "$avastdir" -type f -name "samples.sha256" -exec cat {} + > "${{ github.workspace }}/various/avast.sha256" || true
+          # awk guarantees one hash per line even if source files lack trailing newlines
+          find "$avastdir" -type f -name "samples.md5" -exec awk 1 {} + > "${{ github.workspace }}/various/avast.md5" || true
+          find "$avastdir" -type f -name "samples.sha1" -exec awk 1 {} + > "${{ github.workspace }}/various/avast.sha1" || true
+          find "$avastdir" -type f -name "samples.sha256" -exec awk 1 {} + > "${{ github.workspace }}/various/avast.sha256" || true
           for h in md5 sha1 sha256; do
             if [ -s "${{ github.workspace }}/various/avast.$h" ]; then
               sort -u -o "${{ github.workspace }}/raw/avast.$h" "${{ github.workspace }}/various/avast.$h"
