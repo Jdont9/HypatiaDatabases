@@ -308,9 +308,9 @@ jobs:
           wget -q "https://urlhaus.abuse.ch/downloads/csv_recent/" -O "${{ github.workspace }}/various/urlhaus.csv" || true
           if [ -s "${{ github.workspace }}/various/urlhaus.csv" ]; then
             # extract hostnames directly from any http(s) URL in the CSV
-            grep -oE "https?://[^/"]+" "${GH}/various/urlhaus.csv" \
-              | sed -E "s#^https?://##" \
-              | tr "[:upper:]" "[:lower:]" | sort -u > "${GH}/various/urlhaus-hosts.txt" || true
+            grep -oE 'https?://[^/"]+' "${{ github.workspace }}/various/urlhaus.csv" \
+              | sed -E 's#^https?://##' \
+              | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/urlhaus-hosts.txt" || true
             if [ -s "${{ github.workspace }}/various/urlhaus-hosts.txt" ]; then
               echo "URLhaus: $(wc -l < "${{ github.workspace }}/various/urlhaus-hosts.txt") unique hosts."
               cat "${{ github.workspace }}/various/urlhaus-hosts.txt" >> "${{ github.workspace }}/domains/divested.txt"
@@ -329,16 +329,13 @@ jobs:
           find "$infodir" -type f -name "*.md" -not -name "README.md" -exec cat {} + > "$allmd" 2>/dev/null || true
           if [ -s "$allmd" ]; then
             # --- hashes: plain hex strings of valid length ---
-            grep -oE "\b[a-fA-F0-9]{32}\b" "$allmd" | tr "[:upper:]" "[:lower:]" | sort -u | grep -vE "^[a-f0-9]{32}$" -v || true > "${{ github.workspace }}/various/infosec.md5"
-            # (rebuild properly below to avoid sed/grep confusion)
             : > "${{ github.workspace }}/various/infosec.md5"; : > "${{ github.workspace }}/various/infosec.sha1"; : > "${{ github.workspace }}/various/infosec.sha256"
             grep -oE "\b[a-fA-F0-9]{32}\b" "$allmd" | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/infosec.md5" || true
             grep -oE "\b[a-fA-F0-9]{40}\b" "$allmd" | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/infosec.sha1" || true
             grep -oE "\b[a-fA-F0-9]{64}\b" "$allmd" | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/infosec.sha256" || true
             for h in md5 sha1 sha256; do
               if [ -s "${{ github.workspace }}/various/infosec.$h" ]; then
-                grep -Ev "^[a-f0-9]+\b([a-f0-9]{8}|[a-f0-9]{24})$" "${{ github.workspace }}/various/infosec.$h" > "${{ github.workspace }}/raw/infosec.$h" || true
-                mv "${{ github.workspace }}/raw/infosec.$h" "${{ github.workspace }}/raw/infosec.$h" 2>/dev/null || true
+                cp "${{ github.workspace }}/various/infosec.$h" "${{ github.workspace }}/raw/infosec.$h"
               fi
             done
             # --- domains: defang + extract, excluding file extensions ---
