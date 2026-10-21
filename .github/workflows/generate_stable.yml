@@ -415,6 +415,12 @@ jobs:
             done
 
             gpg --batch --armor --export "$keyid" > "$deploy/gpg.key"
+
+            # Self-check: every .sig must verify against its .bin before deploy
+            for f in "$deploy"/hypatia-*-bloom.bin; do
+              gpg --batch --yes --verify "$f.sig" "$f" || { echo "::error::GPG verification failed for $f"; exit 1; }
+            done
+            echo "Self-check passed: all signatures verify."
             echo "Signed databases with key $keyid"
             echo "SIGNING_KEY_FOR_APP=$keyid" >> "$GITHUB_STEP_SUMMARY"
 
