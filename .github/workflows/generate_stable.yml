@@ -380,7 +380,6 @@ jobs:
           cp "${{ github.workspace }}/various/generation_report.html" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/various/database_generation_ci.txt" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/static/template.html" "${{ github.workspace }}/deploy"
-          cp "${{ github.workspace }}/static/template.html" "${{ github.workspace }}/deploy/index.html"
           date > "${{ github.workspace }}/deploy/generation_time.html"
 
       # ---------------------------------------------------------
@@ -424,11 +423,46 @@ jobs:
             echo "Signed databases with key $keyid"
             echo "SIGNING_KEY_FOR_APP=$keyid" >> "$GITHUB_STEP_SUMMARY"
 
+            # Upstream-identical index metadata files
+            shortid="${keyid: -16}"
+            signer=$(gpg --list-secret-keys --with-colons | awk -F: '/^uid/{print $10; exit}' | grep -oE '<[^>]+>' | head -1 | tr -d '<>')
+            echo "$shortid" > "$deploy/sign_key.txt"
+            echo "$signer" > "$deploy/signer.txt"
+            date > "$deploy/sign_time.html"
+
           else
             echo "::warning::GPG_PRIVATE_KEY secret not set — deploying unsigned."
             cp "${{ github.workspace }}/gpg.key" "$deploy/" || true
             cp "${{ github.workspace }}"/*.bin.sig "$deploy/" 2>/dev/null || true
           fi
+
+      # Replicates the index page of maintainteam.github.io/HypatiaDatabases:
+      # file tree (tree -s -D), signing info, then the stats template.
+      # Rendered by Jekyll on GitHub Pages (no .nojekyll on the branch).
+      - name: Build index.md (upstream-identical page layout)
+        shell: bash
+        run: |
+          deploy="${{ github.workspace }}/deploy"
+          shortid=$(cat "$deploy/sign_key.txt" 2>/dev/null || echo "unknown")
+          signer=$(cat "$deploy/signer.txt" 2>/dev/null || echo "unknown")
+          cd "$deploy"
+          {
+            echo "# Files"
+            echo ""
+            tree -a -s -D --timefmt='%d-%b-%Y %H:%M' . | sed 's/$/  /'
+            echo ""
+            echo "* * *"
+            echo ""
+            echo "Signing Key: $shortid  "
+            echo "Signed by: $signer  "
+            echo "Current Databases created with: CI  "
+            echo "Signed & Created Report with GitHub Actions CI"
+            echo ""
+            echo "* * *"
+            echo ""
+            cat "$deploy/template.html"
+          } > "$deploy/index.md"
+          rm -f "$deploy/index.html"
 
       - name: Deploy to unsigned branch
         uses: peaceiris/actions-gh-pages@v4
@@ -440,6 +474,24 @@ jobs:
           force_orphan: false
           keep_files: true
           publish_branch: unsigned
+
+      # GitHub Pages must run Jekyll to render index.md; .nojekyll (and the
+      # old raw-markdown index.html) would shadow it. keep_files:true in the
+      # deploy action never deletes them, so do it here once.
+      - name: Pages housekeeping (enable Jekyll)
+        shell: bash
+        run: |
+          cd "${{ github.workspace }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin unsigned
+          git checkout -B unsigned origin/unsigned || exit 0
+          if git rm -f .nojekyll index.html 2>/dev/null; then
+            git commit -m "Remove .nojekyll and stale index.html to enable Jekyll-rendered index.md"
+            git push origin unsigned
+          else
+            echo "Nothing to clean."
+          fi
 
       - name: Commit refreshed divest.zip cache
         if: env.DIVEST_CACHE_UPDATED == '1'
