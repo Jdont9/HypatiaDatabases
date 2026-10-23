@@ -13,11 +13,18 @@ This repo has several branches. The `main` branch contains the [code](.github/wo
 - [CyberCure](https://www.cybercure.ai/)
 - [SaneSecurity](https://sanesecurity.com/)
 - [Signature Base](https://github.com/Neo23x0/signature-base)
+- [MalShare](https://malshare.com/) (API, accumulated daily; needs the `MALSHARE_KEY` secret)
+- [Zscaler ThreatLabz IOCs](https://github.com/threatlabz/iocs) (MIT)
 ### Specific Sources
 - [Stalkerware IOCs](https://github.com/AssoEchap/stalkerware-indicators)
 - [Covid-19 IOCs](https://github.com/avast/covid-19-ioc)
+- [Citizen Lab malware indicators](https://github.com/citizenlab/malware-indicators) (CC BY-NC-SA 4.0)
 ### Domain Sources
 - Divested Computing Group's [Domain Blocklists](https://divested.dev/pages/dnsbl)
+- [HaGeZi Threat Intelligence Feeds](https://github.com/hagezi/dns-blocklists)
+- [URLhaus hostfile](https://urlhaus.abuse.ch/api/) (abuse.ch)
+
+Extra domain sources (HaGeZi, URLhaus, MVT, Avast, Infosec, Citizen Lab) are filtered against an allowlist (Tranco top 10k + MISP warninglists) before being merged. The Divest list is not filtered.
 ## Generation
 The databases are generated on GitHub's and Codeberg's CI. We utilize a fork of Divest Mobile's [database generator](./src/main/java/org/maintainteam/hypatiadatabases/App.java) to sort the database files, aggregate the hashes, and then create Bloom Filters from them. Then, GitHub/Codeberg Pages are used to publish the files online.
 ## Contribution

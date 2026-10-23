@@ -105,6 +105,20 @@ jobs:
             echo "::warning::No md5 hashes found in scafroglia93/blocklists"
           fi
 
+      # MalShare md5: read from the accumulated cache that generate_stable.yml
+      # commits to main (cache/malshare.csv: first_seen,md5,sha1,sha256).
+      # No API call here, so no extra quota is used.
+      - name: DATABASE PREPARATION - MalShare (md5 from cache)
+        continue-on-error: true
+        run: |
+          cache="${{ github.workspace }}/cache/malshare.csv"
+          if [ -s "$cache" ]; then
+            cut -d, -f2 "$cache" | grep -E '^[a-f0-9]{32}$' | sort -u > "${{ github.workspace }}/raw-extended/malshare.md5" || true
+            echo "MalShare: $(wc -l < "${{ github.workspace }}/raw-extended/malshare.md5") md5 signatures."
+          else
+            echo "::warning::cache/malshare.csv not found - run generate_stable first."
+          fi
+
       - name: GENERATE EXTENDED HYPATIA MD5 DATABASE
         run: |
           mvn -q -B --no-transfer-progress clean compile exec:java \

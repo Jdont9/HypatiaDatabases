@@ -31,6 +31,8 @@ jobs:
           mkdir -p "${{ github.workspace }}/exclusions/"
           mkdir -p "${{ github.workspace }}/various/"
           mkdir -p "${{ github.workspace }}/domains/"
+          mkdir -p "${{ github.workspace }}/cache-new/"
+          : > "${{ github.workspace }}/various/domains-extra.txt"
           cp ${{ github.workspace }}/static/* "${{ github.workspace }}/raw/"
 
       - name: DATABASE PREPARATION - ClamAV
@@ -303,7 +305,7 @@ jobs:
           find "${{ github.workspace }}/various/mvt/" -name "sha256.txt" -exec cat {} + |
             grep -E '^[a-fA-F0-9]{64}$' | sort -u > "${{ github.workspace }}/raw/mvt.sha256"
           find "${{ github.workspace }}/various/mvt/" -name "domains.txt" -exec cat {} + |
-            sort -u >> "${{ github.workspace }}/domains/divested.txt"
+            sort -u >> "${{ github.workspace }}/various/domains-extra.txt"
           echo "MVT: $(wc -l < "${{ github.workspace }}/raw/mvt.sha256") sha256 signatures, domains appended."
 
       - name: DATABASE PREPARATION - Amnesty Investigations
@@ -339,26 +341,39 @@ jobs:
               "${{ github.workspace }}/various/avast-all.txt" \
               | grep -oE "([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}" \
               | tr "[:upper:]" "[:lower:]" | sort -u \
-              >> "${{ github.workspace }}/domains/divested.txt" || true
+              >> "${{ github.workspace }}/various/domains-extra.txt" || true
             echo "Avast IOC: domains extracted from $(wc -l < "${{ github.workspace }}/various/avast-all.txt") lines."
           fi
-      # abuse.ch URLhaus: recent malware distribution URLs -> hostnames.
-      # Sends the Auth-Key header too, in case the endpoint now requires it.
-      - name: DATABASE PREPARATION - URLhaus
+      # abuse.ch URLhaus: hostfile (hostnames of online malware URLs).
+      # Falls back to the old csv_recent export if the hostfile is unavailable.
+      # Output goes to various/domains-extra.txt (allowlist-filtered later).
+      - name: DATABASE PREPARATION - URLhaus (hostfile)
         continue-on-error: true
+        shell: bash
         env:
           ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
         run: |
-          wget -q --header "Auth-Key: ${ABUSECH_KEY}" "https://urlhaus.abuse.ch/downloads/csv_recent/" -O "${{ github.workspace }}/various/urlhaus.csv" || true
-          if [ -s "${{ github.workspace }}/various/urlhaus.csv" ]; then
-            # extract hostnames directly from any http(s) URL in the CSV
-            grep -oE 'https?://[^/"]+' "${{ github.workspace }}/various/urlhaus.csv" \
-              | sed -E 's#^https?://##' \
-              | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/urlhaus-hosts.txt" || true
-            if [ -s "${{ github.workspace }}/various/urlhaus-hosts.txt" ]; then
-              echo "URLhaus: $(wc -l < "${{ github.workspace }}/various/urlhaus-hosts.txt") unique hosts."
-              cat "${{ github.workspace }}/various/urlhaus-hosts.txt" >> "${{ github.workspace }}/domains/divested.txt"
+          ws="${{ github.workspace }}"
+          hf="$ws/various/urlhaus-hostfile.txt"
+          hdr=()
+          [ -n "$ABUSECH_KEY" ] && hdr=(-H "Auth-Key: ${ABUSECH_KEY}")
+          : > "$hf"
+          curl -fsSL --retry 2 --max-time 120 "${hdr[@]}" "https://urlhaus.abuse.ch/downloads/hostfile/" -o "$hf" || true
+          if [ -s "$hf" ] && ! head -c 200 "$hf" | grep -qi "<!DOCTYPE\|<html"; then
+            # hosts format: "127.0.0.1<TAB>domain"; drop comments and bare IPs
+            awk '!/^[[:space:]]*#/ && NF>=2 {print tolower($2)}' "$hf" \
+              | grep -vE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u > "$ws/various/urlhaus-hosts.txt" || true
+          else
+            echo "::warning::URLhaus hostfile unavailable - falling back to csv_recent."
+            wget -q "${hdr[@]}" "https://urlhaus.abuse.ch/downloads/csv_recent/" -O "$ws/various/urlhaus.csv" || true
+            if [ -s "$ws/various/urlhaus.csv" ]; then
+              grep -oE 'https?://[^/"]+' "$ws/various/urlhaus.csv" | sed -E 's#^https?://##; s#:[0-9]+$##' \
+                | tr "[:upper:]" "[:lower:]" | grep -vE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u > "$ws/various/urlhaus-hosts.txt" || true
             fi
+          fi
+          if [ -s "$ws/various/urlhaus-hosts.txt" ]; then
+            echo "URLhaus: $(wc -l < "$ws/various/urlhaus-hosts.txt") unique hosts."
+            cat "$ws/various/urlhaus-hosts.txt" >> "$ws/various/domains-extra.txt"
           fi
       # GithubInfosec/latest-malware-IoC: SOC-curated IOCs from recent
       # threat research (~36 campaigns: APT41, DarkGate, Medusa, ...).
@@ -387,9 +402,214 @@ jobs:
               | grep -oE "([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}" \
               | grep -vE "\.(dll|exe|tmp|pdf|bin|dat|jpg|png|gif|zip|rar|7z|ps1|bat|vbs|js|hta|jar|txt|md|csv|xls|xlsx|doc|docx|ppt|pptx|msi|scr|pif|lnk|iso|img|cab|sys)$" \
               | tr "[:upper:]" "[:lower:]" | sort -u \
-              >> "${{ github.workspace }}/domains/divested.txt" || true
+              >> "${{ github.workspace }}/various/domains-extra.txt" || true
             echo "GithubInfosec: md5 $(wc -l < "${{ github.workspace }}/various/infosec.md5"), sha1 $(wc -l < "${{ github.workspace }}/various/infosec.sha1"), sha256 $(wc -l < "${{ github.workspace }}/various/infosec.sha256") hashes."
           fi
+      # Citizen Lab malware-indicators (spyware campaigns). Licence: CC BY-NC-SA 4.0
+      # (non-commercial, share-alike) - check it fits your distribution.
+      - name: DATABASE PREPARATION - Citizen Lab
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          git clone --depth 1 https://github.com/citizenlab/malware-indicators.git "$ws/various/citizenlab/"
+          python3 - "$ws/various/citizenlab" "$ws" <<'PY'
+          import csv, os, re, sys
+          from urllib.parse import urlparse
+          src, ws = sys.argv[1], sys.argv[2]
+          hexrx = {n: re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{%d}(?![0-9a-fA-F])" % n) for n in (32, 40, 64)}
+          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+          dom = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z][a-z0-9-]{1,62}$")
+          hashes = {32: set(), 40: set(), 64: set()}
+          domains = set()
+          rows = 0
+          for root, _, files in os.walk(src):
+              for name in files:
+                  if not name.lower().endswith(".csv"):
+                      continue
+                  with open(os.path.join(root, name), newline="", encoding="utf-8", errors="ignore") as fh:
+                      for row in csv.DictReader(fh):
+                          r = {k.strip().lower(): (v or "").strip() for k, v in row.items() if k is not None and isinstance(v, (str, type(None)))}
+                          typ, val = r.get("type", "").lower(), r.get("value", "")
+                          if not val:
+                              continue
+                          rows += 1
+                          for n, rx in hexrx.items():
+                              for m in rx.findall(val):
+                                  hashes[n].add(m.lower())
+                          host = ""
+                          if typ in ("domain", "hostname") or typ.startswith(("domain|", "hostname|")):
+                              host = val.split("|")[0]
+                          elif typ == "url":
+                              host = urlparse(val if "://" in val else "http://" + val).hostname or ""
+                          host = host.lower().strip(".")
+                          if host and not ip.match(host) and dom.match(host):
+                              domains.add(host)
+          for n, ext in ((32, "md5"), (40, "sha1"), (64, "sha256")):
+              if hashes[n]:
+                  open(f"{ws}/raw/citizenlab.{ext}", "w").write("\n".join(sorted(hashes[n])) + "\n")
+          with open(f"{ws}/various/domains-extra.txt", "a") as f:
+              f.write("\n".join(sorted(domains)) + ("\n" if domains else ""))
+          print(f"Citizen Lab: {rows} rows, md5 {len(hashes[32])}, sha1 {len(hashes[40])}, sha256 {len(hashes[64])}, domains {len(domains)}")
+          if rows == 0:
+              print("::warning::Citizen Lab: no rows parsed (CSV columns 'type'/'value' not found?) - check the repo layout.")
+          PY
+
+      # Zscaler ThreatLabz IOCs (MIT). Hashes only: the files are free-form,
+      # domains would be too noisy. Note: the repo has been quiet since 2024.
+      - name: DATABASE PREPARATION - Zscaler ThreatLabz
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          git clone --depth 1 https://github.com/threatlabz/iocs.git "$ws/various/threatlabz/"
+          find "$ws/various/threatlabz/" -type f -not -path '*/.git/*' -not -iname '*.yar' -not -iname '*.yara' -not -iname 'LICENSE*' \
+            -exec awk 1 {} + > "$ws/various/threatlabz-all.txt" 2>/dev/null || true
+          for spec in "md5 32" "sha1 40" "sha256 64"; do
+            set -- $spec
+            grep -aoE "\b[a-fA-F0-9]{$2}\b" "$ws/various/threatlabz-all.txt" | tr '[:upper:]' '[:lower:]' | sort -u > "$ws/various/threatlabz.$1" || true
+            [ -s "$ws/various/threatlabz.$1" ] && cp "$ws/various/threatlabz.$1" "$ws/raw/threatlabz.$1"
+          done
+          echo "ThreatLabz: md5 $(wc -l < "$ws/various/threatlabz.md5"), sha1 $(wc -l < "$ws/various/threatlabz.sha1"), sha256 $(wc -l < "$ws/various/threatlabz.sha256")."
+
+      # HaGeZi Threat Intelligence Feeds (domains). Check the licence of the repo.
+      - name: DATABASE PREPARATION - HaGeZi TIF
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          dest="$ws/various/hagezi-tif.txt"
+          ok=0
+          for url in \
+            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/tif.txt" \
+            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif-onlydomains.txt"; do
+            if curl -fsSL --retry 2 --max-time 180 "$url" -o "$dest" && [ -s "$dest" ] && ! head -c 200 "$dest" | grep -qi "<!DOCTYPE\|<html"; then
+              ok=1; echo "HaGeZi TIF fetched from $url"; break
+            fi
+          done
+          if [ "$ok" != 1 ]; then echo "::warning::HaGeZi TIF unavailable - skipping."; exit 0; fi
+          tr -d '\r' < "$dest" | grep -Ev '^[[:space:]]*(#|!|$)' | sed 's/^\*\.//' | tr '[:upper:]' '[:lower:]' \
+            >> "$ws/various/domains-extra.txt"
+          echo "HaGeZi TIF: $(wc -l < "$dest") lines."
+
+      # MalShare API. getlist only covers the LAST 24h and the schedule runs every
+      # 2 days, so hashes are accumulated in cache/malshare.csv (committed to main
+      # by the last step). Format: first_seen,md5,sha1,sha256.
+      # Secret needed: MALSHARE_KEY. One getlist call per run (quota-friendly).
+      # sha256 -> stable DB; md5 is read by generate_extended.yml from the same cache.
+      - name: DATABASE PREPARATION - MalShare (API + accumulated cache)
+        continue-on-error: true
+        shell: bash
+        env:
+          MALSHARE_KEY: ${{ secrets.MALSHARE_KEY }}
+          # Optional: comma-separated MalShare file types (see action=gettypes) to keep
+          # the DB Android-relevant; empty = everything from getlist.
+          MALSHARE_TYPES: ""
+          MALSHARE_RETENTION_DAYS: "30"
+        run: |
+          ws="${{ github.workspace }}"
+          cache="$ws/cache/malshare.csv"
+          prev="$ws/various/malshare-prev.csv"
+          today="$ws/various/malshare-today.csv"
+          mkdir -p "$ws/cache-new"
+          [ -f "$cache" ] && cp "$cache" "$prev" || : > "$prev"
+          : > "$today"
+          if [ -z "$MALSHARE_KEY" ]; then
+            echo "::warning::MALSHARE_KEY secret not set - using cached MalShare data only."
+          else
+            fetch() {
+              curl -fsS --max-time 120 -G "https://malshare.com/api.php" \
+                --data-urlencode "api_key=${MALSHARE_KEY}" --data-urlencode "action=$1" ${2:+--data-urlencode "type=$2"}
+            }
+            parse() {
+              jq -r '.. | objects | select(has("sha256")) | [(.md5 // ""), (.sha1 // ""), (.sha256 // "")] | map(ascii_downcase) | join(",")'
+            }
+            if [ -n "$MALSHARE_TYPES" ]; then
+              IFS=',' read -ra types <<< "$MALSHARE_TYPES"
+              for t in "${types[@]}"; do fetch type "$t" | parse >> "$today" || echo "::warning::MalShare type '$t' failed."; done
+            else
+              fetch getlist | parse >> "$today" || echo "::warning::MalShare getlist failed (bad key or quota?)."
+            fi
+            sed -i "s/^/$(date -u +%F),/" "$today"
+            echo "MalShare: $(wc -l < "$today") hashes fetched today."
+          fi
+          # merge: keep first-seen date, drop invalid rows, prune by retention
+          cutoff=$(date -u -d "-${MALSHARE_RETENTION_DAYS} days" +%F)
+          cat "$prev" "$today" | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2},[a-f0-9]{0,32},[a-f0-9]{0,40},[a-f0-9]{64}$' \
+            | sort -t, -k1,1 | awk -F, '!seen[$4]++' | awk -F, -v c="$cutoff" '$1>=c' > "$ws/cache-new/malshare.csv" || true
+          if [ -s "$ws/cache-new/malshare.csv" ]; then
+            cut -d, -f4 "$ws/cache-new/malshare.csv" | sort -u > "$ws/raw/malshare.sha256"
+            echo "MalShare: $(wc -l < "$ws/raw/malshare.sha256") sha256 in DB (retention ${MALSHARE_RETENTION_DAYS}d)."
+            if ! cmp -s "$ws/cache-new/malshare.csv" "$cache"; then echo "MALSHARE_CACHE_UPDATED=1" >> "$GITHUB_ENV"; fi
+          fi
+
+      # Domain post-processing: extra sources (MVT, Avast, URLhaus, Infosec, Citizen Lab,
+      # HaGeZi) are written to various/domains-extra.txt, filtered against an allowlist
+      # (Tranco top-N + MISP warninglists), validated, then appended to divested.txt.
+      # The Divest list itself is NOT filtered (behaviour unchanged).
+      # If the allowlist cannot be built, extras are NOT merged (avoids false positives).
+      - name: DOMAIN POST-PROCESSING - allowlist and merge
+        continue-on-error: true
+        shell: bash
+        env:
+          TRANCO_TOP: "10000"
+        run: |
+          ws="${{ github.workspace }}"
+          allow="$ws/various/allowlist.txt"
+          : > "$allow"
+          if curl -fsSL -L --retry 2 --max-time 180 "https://tranco-list.eu/top-1m.csv.zip" -o /tmp/tranco.zip \
+             && unzip -p /tmp/tranco.zip top-1m.csv > /tmp/tranco.csv; then
+            head -n "$TRANCO_TOP" /tmp/tranco.csv | cut -d, -f2 | tr -d '\r' >> "$allow"
+          else
+            echo "::warning::Tranco download failed."
+          fi
+          git clone --depth 1 https://github.com/MISP/misp-warninglists.git "$ws/various/misp-warninglists" || true
+          for l in tranco10k moz-top500 common-ioc-false-positive microsoft google apple; do
+            f="$ws/various/misp-warninglists/lists/$l/list.json"
+            if [ -f "$f" ]; then jq -r '.list[]? | strings' "$f" >> "$allow" || true; else echo "MISP list '$l' not found, skipped."; fi
+          done
+          if python3 - "$ws" <<'PY'
+          import os, re, sys
+          ws = sys.argv[1]
+          allow = set()
+          for l in open(f"{ws}/various/allowlist.txt", errors="ignore"):
+              d = l.strip().lower().lstrip("*.").rstrip(".")
+              if d:
+                  allow.add(d)
+          if len(allow) < 1000:
+              print(f"Allowlist too small ({len(allow)}).")
+              sys.exit(2)
+          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+          dom = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z][a-z0-9-]{1,62}$")
+          kept, dropped, invalid = set(), [], 0
+          for l in open(f"{ws}/various/domains-extra.txt", errors="ignore"):
+              d = l.strip().lower()
+              if not d or d.startswith(("#", "!")):
+                  continue
+              d = d.split()[-1].lstrip("*.").rstrip(".")
+              if ip.match(d) or not dom.match(d):
+                  invalid += 1
+                  continue
+              base = d[4:] if d.startswith("www.") else d
+              if d in allow or base in allow:
+                  dropped.append(d)
+                  continue
+              kept.add(d)
+          out = f"{ws}/domains/divested.txt"
+          needs_nl = os.path.exists(out) and os.path.getsize(out) > 0 and not open(out, "rb").read()[-1:] == b"\n"
+          with open(out, "a") as f:
+              if needs_nl:
+                  f.write("\n")
+              f.write("\n".join(sorted(kept)) + ("\n" if kept else ""))
+          print(f"Extra domains: kept {len(kept)}, allowlisted {len(set(dropped))}, invalid {invalid}, allowlist size {len(allow)}.")
+          print("Sample allowlisted (review for surprises):", sorted(set(dropped))[:40])
+          PY
+          then
+            echo "Merged extra domains into divested.txt: $(wc -l < "$ws/domains/divested.txt") total lines."
+          else
+            echo "::warning::Allowlist step failed - extra domain sources were NOT merged."
+          fi
+
       - name: GENERATE HYPATIA SIGNATURE DATABASES
         run: |
           mvn -q -B --no-transfer-progress clean compile exec:java \
@@ -520,15 +740,22 @@ jobs:
           keep_files: true
           publish_branch: unsigned
 
-      - name: Commit refreshed divest.zip cache
-        if: env.DIVEST_CACHE_UPDATED == '1'
+      - name: Commit refreshed caches (divest.zip, malshare)
+        if: env.DIVEST_CACHE_UPDATED == '1' || env.MALSHARE_CACHE_UPDATED == '1'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git checkout -B main origin/main
-          cp "${{ github.workspace }}/cache-new/divest.zip" "${{ github.workspace }}/divest.zip"
-          git add divest.zip
-          git commit -m "Refresh divest.zip cache from divested.dev [skip ci]" || exit 0
+          if [ "$DIVEST_CACHE_UPDATED" = "1" ]; then
+            cp "${{ github.workspace }}/cache-new/divest.zip" "${{ github.workspace }}/divest.zip"
+            git add divest.zip
+          fi
+          if [ "$MALSHARE_CACHE_UPDATED" = "1" ]; then
+            mkdir -p cache
+            cp "${{ github.workspace }}/cache-new/malshare.csv" cache/malshare.csv
+            git add cache/malshare.csv
+          fi
+          git commit -m "Refresh caches [skip ci]" || exit 0
           git push origin main
