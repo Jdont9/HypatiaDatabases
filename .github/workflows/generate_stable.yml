@@ -534,8 +534,10 @@ jobs:
           # .nojekyll disables Jekyll -> index.md never renders -> 404 on root.
           # Delete branch files via the API (no workspace checkout needed).
           for f in .nojekyll index.html; do
-            sha=$(gh api "repos/${{ github.repository }}/contents/$f?ref=unsigned" --jq .sha 2>/dev/null || true)
-            if [ -n "$sha" ]; then
+            # "// empty" is crucial: for a missing file the API error body
+            # makes --jq .sha return the literal string "null" (non-empty!).
+            sha=$(gh api "repos/${{ github.repository }}/contents/$f?ref=unsigned" --jq '.sha // empty' 2>/dev/null || true)
+            if [ -n "$sha" ] && [ "$sha" != "null" ]; then
               gh api -X DELETE "repos/${{ github.repository }}/contents/$f" \
                 -f message="Remove $f (enable Jekyll-rendered index.md)" \
                 -f sha="$sha" -f branch="unsigned" \
