@@ -17,7 +17,7 @@ jobs:
       - name: Dependency Setup
         run: |
           sudo apt-get update -y
-          sudo apt install maven unzip git dos2unix -y
+          sudo apt install maven unzip git dos2unix pandoc -y
 
       - name: Start ClamAV daemon clamd
         uses: toblux/start-clamd-github-action@v0.2.1
@@ -481,8 +481,9 @@ jobs:
 
       # Replicates the index page of maintainteam.github.io/HypatiaDatabases:
       # file tree (tree -s -D), signing info, then the stats template.
-      # Rendered by Jekyll on GitHub Pages (no .nojekyll on the branch).
-      - name: Build index.md (upstream-identical page layout)
+      # Rendered to HTML with pandoc: no Jekyll needed, so the .nojekyll
+      # file that peaceiris recreates on every deploy is harmless.
+      - name: Build index.html (upstream-identical page layout)
         shell: bash
         run: |
           deploy="${{ github.workspace }}/deploy"
@@ -490,11 +491,6 @@ jobs:
           signer=$(cat "$deploy/signer.txt" 2>/dev/null || echo "unknown")
           cd "$deploy"
           {
-            # Empty YAML front matter: without it Jekyll copies .md files
-            # verbatim instead of converting them to HTML.
-            echo "---"
-            echo "---"
-            echo ""
             echo "# Files"
             echo ""
             tree -a -s -D --timefmt='%d-%b-%Y %H:%M' . | sed 's/$/  /'
@@ -510,7 +506,8 @@ jobs:
             echo ""
             cat "$deploy/template.html"
           } > "$deploy/index.md"
-          rm -f "$deploy/index.html"
+          pandoc "$deploy/index.md" -o "$deploy/index.html"
+          rm -f "$deploy/index.md"
 
       - name: Deploy to unsigned branch
         uses: peaceiris/actions-gh-pages@v4
@@ -522,31 +519,6 @@ jobs:
           force_orphan: false
           keep_files: true
           publish_branch: unsigned
-
-      # GitHub Pages must run Jekyll to render index.md; .nojekyll (and the
-      # old raw-markdown index.html) would shadow it. keep_files:true in the
-      # deploy action never deletes them, so do it here once.
-      - name: Pages housekeeping (enable Jekyll)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # .nojekyll disables Jekyll -> index.md never renders -> 404 on root.
-          # Delete branch files via the API (no workspace checkout needed).
-          for f in .nojekyll index.html; do
-            # "// empty" is crucial: for a missing file the API error body
-            # makes --jq .sha return the literal string "null" (non-empty!).
-            sha=$(gh api "repos/${{ github.repository }}/contents/$f?ref=unsigned" --jq '.sha // empty' 2>/dev/null || true)
-            if [ -n "$sha" ] && [ "$sha" != "null" ]; then
-              gh api -X DELETE "repos/${{ github.repository }}/contents/$f" \
-                -f message="Remove $f (enable Jekyll-rendered index.md)" \
-                -f sha="$sha" -f branch="unsigned" \
-                && echo "Removed $f from unsigned" \
-                || { echo "::error::Failed to remove $f"; exit 1; }
-            else
-              echo "$f not present on unsigned"
-            fi
-          done
 
       - name: Commit refreshed divest.zip cache
         if: env.DIVEST_CACHE_UPDATED == '1'
