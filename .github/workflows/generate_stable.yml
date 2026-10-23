@@ -344,37 +344,62 @@ jobs:
               >> "${{ github.workspace }}/various/domains-extra.txt" || true
             echo "Avast IOC: domains extracted from $(wc -l < "${{ github.workspace }}/various/avast-all.txt") lines."
           fi
-      # abuse.ch URLhaus: hostfile (hostnames of online malware URLs).
-      # Falls back to the old csv_recent export if the hostfile is unavailable.
-      # Output goes to various/domains-extra.txt (allowlist-filtered later).
-      - name: DATABASE PREPARATION - URLhaus (hostfile)
+      # abuse.ch URLhaus: the old public downloads (hostfile, csv_recent) now answer 401.
+      # New export API: https://urlhaus-api.abuse.ch/v2/files/exports/<AUTH-KEY>/<file>
+      # (same pattern as ThreatFox / MalwareBazaar). Needs the ABUSECH_KEY secret.
+      # recent.csv is used by default; if you see the exact name of the hostfile export
+      # when logged in on https://urlhaus.abuse.ch/api/, set URLHAUS_EXPORT_FILE to it
+      # (both CSV and hosts formats are parsed). Output: various/domains-extra.txt.
+      - name: DATABASE PREPARATION - URLhaus (export API)
         continue-on-error: true
         shell: bash
         env:
           ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
+          URLHAUS_EXPORT_FILE: recent.csv
+          URLHAUS_ONLY_ONLINE: "1"
         run: |
           ws="${{ github.workspace }}"
-          hf="$ws/various/urlhaus-hostfile.txt"
-          hdr=()
-          [ -n "$ABUSECH_KEY" ] && hdr=(-H "Auth-Key: ${ABUSECH_KEY}")
-          : > "$hf"
-          curl -fsSL --retry 2 --max-time 120 "${hdr[@]}" "https://urlhaus.abuse.ch/downloads/hostfile/" -o "$hf" || true
-          if [ -s "$hf" ] && ! head -c 200 "$hf" | grep -qi "<!DOCTYPE\|<html"; then
-            # hosts format: "127.0.0.1<TAB>domain"; drop comments and bare IPs
-            awk '!/^[[:space:]]*#/ && NF>=2 {print tolower($2)}' "$hf" \
-              | grep -vE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u > "$ws/various/urlhaus-hosts.txt" || true
-          else
-            echo "::warning::URLhaus hostfile unavailable - falling back to csv_recent."
-            wget -q "${hdr[@]}" "https://urlhaus.abuse.ch/downloads/csv_recent/" -O "$ws/various/urlhaus.csv" || true
-            if [ -s "$ws/various/urlhaus.csv" ]; then
-              grep -oE 'https?://[^/"]+' "$ws/various/urlhaus.csv" | sed -E 's#^https?://##; s#:[0-9]+$##' \
-                | tr "[:upper:]" "[:lower:]" | grep -vE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u > "$ws/various/urlhaus-hosts.txt" || true
-            fi
+          if [ -z "$ABUSECH_KEY" ]; then
+            echo "::warning::ABUSECH_KEY secret not set - skipping URLhaus."
+            exit 0
           fi
+          dl="$ws/various/urlhaus-export.txt"
+          code=$(curl -sS -L --retry 2 --max-time 180 -H "Auth-Key: ${ABUSECH_KEY}" \
+            -o "$dl" -w "%{http_code}" "https://urlhaus-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}/${URLHAUS_EXPORT_FILE}") || true
+          if [ "$code" != "200" ] || [ ! -s "$dl" ] || head -c 200 "$dl" | grep -qi "<!DOCTYPE\|<html"; then
+            echo "::warning::URLhaus export failed (HTTP ${code}) - skipping."
+            exit 0
+          fi
+          if unzip -tq "$dl" >/dev/null 2>&1; then unzip -p "$dl" > "$dl.txt" && mv "$dl.txt" "$dl"; fi
+          python3 - "$dl" "$ws/various/urlhaus-hosts.txt" "$URLHAUS_ONLY_ONLINE" <<'PY'
+          import csv, re, sys
+          from urllib.parse import urlparse
+          src, out, only_online = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+          hosts = set()
+          for line in open(src, errors="ignore"):
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              fields = next(csv.reader([line]), [])
+              url = next((f for f in fields if re.match(r"^https?://", f, re.I)), None)
+              if url:
+                  status = next((f.lower() for f in fields if f.lower() in ("online", "offline")), "")
+                  if only_online and status == "offline":
+                      continue
+                  h = (urlparse(url).hostname or "").lower()
+              else:  # hosts format: "127.0.0.1<TAB>domain"
+                  parts = line.split()
+                  h = parts[1].lower() if len(parts) >= 2 and ip.match(parts[0]) else ""
+              if h and not ip.match(h) and "." in h:
+                  hosts.add(h)
+          open(out, "w").write("\n".join(sorted(hosts)) + ("\n" if hosts else ""))
+          print(f"URLhaus: {len(hosts)} unique hostnames (IPs excluded).")
+          PY
           if [ -s "$ws/various/urlhaus-hosts.txt" ]; then
-            echo "URLhaus: $(wc -l < "$ws/various/urlhaus-hosts.txt") unique hosts."
             cat "$ws/various/urlhaus-hosts.txt" >> "$ws/various/domains-extra.txt"
           fi
+
       # GithubInfosec/latest-malware-IoC: SOC-curated IOCs from recent
       # threat research (~36 campaigns: APT41, DarkGate, Medusa, ...).
       # Hashes and domains are embedded in Markdown tables/text files.
