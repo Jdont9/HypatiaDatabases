@@ -523,18 +523,23 @@ jobs:
       # deploy action never deletes them, so do it here once.
       - name: Pages housekeeping (enable Jekyll)
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd "${{ github.workspace }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin unsigned
-          git checkout -B unsigned origin/unsigned || exit 0
-          if git rm -f .nojekyll index.html 2>/dev/null; then
-            git commit -m "Remove .nojekyll and stale index.html to enable Jekyll-rendered index.md"
-            git push origin unsigned
-          else
-            echo "Nothing to clean."
-          fi
+          # .nojekyll disables Jekyll -> index.md never renders -> 404 on root.
+          # Delete branch files via the API (no workspace checkout needed).
+          for f in .nojekyll index.html; do
+            sha=$(gh api "repos/${{ github.repository }}/contents/$f?ref=unsigned" --jq .sha 2>/dev/null || true)
+            if [ -n "$sha" ]; then
+              gh api -X DELETE "repos/${{ github.repository }}/contents/$f" \
+                -f message="Remove $f (enable Jekyll-rendered index.md)" \
+                -f sha="$sha" -f branch="unsigned" \
+                && echo "Removed $f from unsigned" \
+                || { echo "::error::Failed to remove $f"; exit 1; }
+            else
+              echo "$f not present on unsigned"
+            fi
+          done
 
       - name: Commit refreshed divest.zip cache
         if: env.DIVEST_CACHE_UPDATED == '1'
