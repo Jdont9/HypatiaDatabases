@@ -490,6 +490,11 @@ jobs:
           signer=$(cat "$deploy/signer.txt" 2>/dev/null || echo "unknown")
           cd "$deploy"
           {
+            # Empty YAML front matter: without it Jekyll copies .md files
+            # verbatim instead of converting them to HTML.
+            echo "---"
+            echo "---"
+            echo ""
             echo "# Files"
             echo ""
             tree -a -s -D --timefmt='%d-%b-%Y %H:%M' . | sed 's/$/  /'
