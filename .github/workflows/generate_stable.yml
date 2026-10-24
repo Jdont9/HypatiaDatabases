@@ -105,15 +105,14 @@ jobs:
             > "${{ github.workspace }}/raw/threatfox.sha256"
           echo "ThreatFox: $(wc -l < "${{ github.workspace }}/raw/threatfox.sha256") sha256 signatures."
 
-      # MalwareBazaar exports also need the Auth-Key (confirmed file: recent.csv,
-      # last 48h). For the full dump, log in on https://bazaar.abuse.ch/export/
-      # to see the exact file name, then set MB_EXPORT_FILE below.
+      # MalwareBazaar exports need the Auth-Key. full.csv.zip = complete dump
+      # (~1.1M sha256); recent.csv = only the last 48h (a few thousand).
       - name: DATABASE PREPARATION - MalwareBazaar
         continue-on-error: true
         shell: bash
         env:
           ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
-          MB_EXPORT_FILE: recent.csv
+          MB_EXPORT_FILE: full.csv.zip
         run: |
           if [ -z "$ABUSECH_KEY" ]; then
             echo "::warning::ABUSECH_KEY secret not set - skipping MalwareBazaar."

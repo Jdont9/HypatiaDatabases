@@ -88,7 +88,7 @@ public class App {
         }
         int amtMaxSHA1 = 100000; //100k
         int amtMaxSHA256 = 2200000; //2.2m
-        int amtMaxDomains = 4500000; //4.5m
+        int amtMaxDomains = 6000000; //6m (~18MB file at 1e-5 fpp)
         signaturesMD5 = BloomFilter.create(Funnels.stringFunnel(Charsets.US_ASCII), amtMaxMD5, 0.00001);
         signaturesSHA1 = BloomFilter.create(Funnels.stringFunnel(Charsets.US_ASCII), amtMaxSHA1, 0.00001);
         signaturesSHA256 = BloomFilter.create(Funnels.stringFunnel(Charsets.US_ASCII), amtMaxSHA256, 0.00001);
