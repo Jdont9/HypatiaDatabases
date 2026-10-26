@@ -1,14 +1,12 @@
-Loading existing hypatia-md5-bloom.bin database
-	Loaded 553282 entries
 Processing exclusions:
 	daily.fp
 	main.fp
 	Loaded 995 excluded hashes
 Processing signatures:
 	daily.hdb
-		md5: 0, sha1: 0, sha256: 0
+		md5: 23, sha1: 0, sha256: 0
 	eset.md5
-		md5: 0, sha1: 0, sha256: 11
+		md5: 6098, sha1: 0, sha256: 11
 	main.hdb
 		Skipping excluded hash: 4a01eb2124846787b081029aa1f378a8
 		Skipping excluded hash: 3edcf50443af194bf5131b0f35e3671d
@@ -30,9 +28,11 @@ Processing signatures:
 		Skipping excluded hash: f4504b67c3ef7abb03155c2e00a71f24
 		Skipping excluded hash: a50056f4fc4f451c2daa73508523679d
 		Skipping excluded hash: a7925c63f1198b69f051392722643e07
-		md5: 0, sha1: 0, sha256: 0
+		md5: 20402, sha1: 0, sha256: 0
+	malshare.md5
+		md5: 33, sha1: 0, sha256: 0
 	sanesecurity-bofhland_malware_attach.hdb
-		md5: 0, sha1: 0, sha256: 0
+		md5: 1812, sha1: 0, sha256: 0
 	sanesecurity-crdfam.clamav.hdb
 		md5: 1, sha1: 0, sha256: 0
 	sanesecurity-doppelstern.hdb
@@ -44,7 +44,7 @@ Processing signatures:
 	sanesecurity-spamattach.hdb
 		md5: 0, sha1: 0, sha256: 14
 	sanesecurity-spamimg.hdb
-		md5: 0, sha1: 0, sha256: 925
+		md5: 0, sha1: 0, sha256: 930
 	sanesecurity-winnow.attachments.hdb
 		md5: 0, sha1: 0, sha256: 0
 	sanesecurity-winnow_bad_cw.hdb
@@ -54,17 +54,16 @@ Processing signatures:
 	sanesecurity-winnow_malware.hdb
 		md5: 0, sha1: 0, sha256: 0
 	targetedthreats.hdb
-		md5: 0, sha1: 0, sha256: 0
+		md5: 239, sha1: 0, sha256: 0
 	threatview.md5
-		md5: 0, sha1: 0, sha256: 0
-Lines read: valid: 31219, invalid: 0
-Read count: md5: 29255, sha1: 0, sha256: 1964, domains: 0
-Added count: md5: 3, sha1: 0, sha256: 1917, domains: 0
-Approximate count: md5: 3, sha1: 0, sha256: 1917, domains: 0
-Deduped count: md5: 29252
-Max amount: md5: 5000000, sha1: 100000, sha256: 2200000, domains: 4500000
-Fill amount: md5: 6.0E-5%, sha1: 0.0%, sha256: 0.08713636%, domains: 0.0%
-App reported count: 1920
-Expected false postive rate: md5: 4.944366864587737E-109, sha1: 0.0, sha256: 2.7909890006401396E-55, domains: 0.0
+		md5: 10, sha1: 0, sha256: 0
+Lines read: valid: 30636, invalid: 0
+Read count: md5: 28667, sha1: 0, sha256: 1969, domains: 0
+Added count: md5: 28620, sha1: 0, sha256: 1922, domains: 0
+Approximate count: md5: 28619, sha1: 0, sha256: 1922, domains: 0
+Max amount: md5: 7600000, sha1: 100000, sha256: 2200000, domains: 6000000
+Fill amount: md5: 0.37657893%, sha1: 0.0%, sha256: 0.08736363%, domains: 0.0%
+App reported count: 30541
+Expected false postive rate: md5: 1.7579575007312106E-44, sha1: 0.0, sha256: 2.9174134256141842E-55, domains: 0.0
 Testing exclusions:
 	No exclusions found :)
