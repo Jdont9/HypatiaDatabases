@@ -63,17 +63,25 @@ public class App {
     private static int amtPreviousSignaturesSHA256 = 0;
 
     private static boolean extendedMode = false;
+    private static boolean whitelistMode = false;
 
     public static final Set<String> arrExclusions = new HashSet<>();
 
     public static void main(String[] args) {
         if (args.length < 1 || args[0] == null || args[0].isBlank()) {
-            System.err.println("Usage: App <signature-directory> [-extended] [domain-file]");
+            System.err.println("Usage: App <signature-directory> [-extended] [-whitelist] [domain-file]");
             return;
         }
         final File signatureDirectory = new File(args[0]);
         if (!signatureDirectory.isDirectory() || !signatureDirectory.canRead()) {
             System.err.println("Signature directory does not exist or is not readable: " + signatureDirectory);
+            return;
+        }
+        whitelistMode = Arrays.stream(args).skip(1).anyMatch("-whitelist"::equals);
+        if (whitelistMode) {
+            //Known-good APK hashes (see WHITELIST.md): build ONLY the
+            //whitelist bloom, deduped against the current malware database.
+            generateWhitelist(args[0]);
             return;
         }
         extendedMode = Arrays.stream(args).skip(1).anyMatch("-extended"::equals);
@@ -275,6 +283,87 @@ public class App {
         }
     }
 
+    //Known-good APK hashes (WHITELIST.md): same serialised format as
+    //hypatia-sha256-bloom.bin but at a 1e-9 fpp (a false positive would
+    //silently whitelist a file), and every hash present in the current
+    //malware sha256 database is dropped before it enters the filter.
+    private static void generateWhitelist(String directory) {
+        final int amtMaxWhitelist = 3000000; //3m APK hashes (~11MB at 1e-9)
+        BloomFilter<String> signaturesMalwareSHA256 = null;
+        File referenceDatabase = new File(directory + "../production/hypatia-sha256-bloom.bin");
+        if (referenceDatabase.exists()) {
+            try {
+                System.out.println("Loading existing hypatia-sha256-bloom.bin database");
+                FileInputStream databaseLoading = new FileInputStream(referenceDatabase);
+                signaturesMalwareSHA256 = BloomFilter.readFrom(databaseLoading, Funnels.stringFunnel(Charsets.US_ASCII));
+                System.out.println("\tLoaded " + signaturesMalwareSHA256.approximateElementCount() + " malware signatures");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        } else {
+            System.out.println("WARNING: no reference malware database found - the whitelist will NOT be deduplicated against it!");
+        }
+
+        BloomFilter<String> whitelist = BloomFilter.create(Funnels.stringFunnel(Charsets.US_ASCII), amtMaxWhitelist, 0.000000001);
+        int amtWhitelistRead = 0;
+        int amtWhitelistAdded = 0;
+        int amtWhitelistInMalwareDB = 0;
+        int amtWhitelistInvalid = 0;
+
+        File[] databases = new File(directory).listFiles();
+        if (databases == null) {
+            System.err.println("Whitelist directory does not exist or is not readable: " + directory);
+            return;
+        }
+        Arrays.sort(databases);
+        System.out.println("Processing whitelist sources:");
+        for (File databaseLocation : databases) {
+            if (!databaseLocation.isFile()) {
+                continue;
+            }
+            System.out.println("\t" + databaseLocation.getName());
+            int before = amtWhitelistAdded;
+            try (BufferedReader reader = new BufferedReader(new FileReader(databaseLocation))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String hash = line.trim().toLowerCase();
+                    if (hash.isEmpty() || hash.startsWith("#")) {
+                        continue;
+                    }
+                    if (hash.length() == 64 && isHexadecimal(hash)) {
+                        amtWhitelistRead++;
+                        if (signaturesMalwareSHA256 != null && signaturesMalwareSHA256.mightContain(hash)) {
+                            amtWhitelistInMalwareDB++;
+                            continue;
+                        }
+                        if (whitelist.put(hash)) {
+                            amtWhitelistAdded++;
+                        }
+                    } else {
+                        amtWhitelistInvalid++;
+                        System.out.println("\t\tNOT A SHA-256: " + hash);
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            System.out.println("\t\tadded " + (amtWhitelistAdded - before) + " sha256");
+        }
+        System.out.println("Whitelist read: " + amtWhitelistRead + ", added: " + amtWhitelistAdded + ", dropped (in malware DB): " + amtWhitelistInMalwareDB + ", invalid: " + amtWhitelistInvalid);
+        System.out.println("Whitelist approximate count: " + whitelist.approximateElementCount() + " / max " + amtMaxWhitelist);
+        if (whitelist.approximateElementCount() > amtMaxWhitelist) {
+            System.out.println("WARNING: whitelist exceeds capacity - the false positive rate is degraded above 1e-9!");
+        }
+        System.out.println("Whitelist expected false positive rate: " + whitelist.expectedFpp());
+        try {
+            FileOutputStream fileWhitelist = new FileOutputStream(new File(directory) + "/hypatia-whitelist-sha256-bloom.bin");
+            whitelist.writeTo(fileWhitelist);
+            fileWhitelist.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     //Credit: https://stackoverflow.com/a/13667522
     private static final Pattern HEXADECIMAL_PATTERN = Pattern.compile("\\p{XDigit}+");
 
@@ -344,7 +433,7 @@ public class App {
                 hashType ="sha1";
                 break;
             case 64:
-                hashType ="sha256";
+                hashType = "sha256";
                 break;
             default:
                 return false;
