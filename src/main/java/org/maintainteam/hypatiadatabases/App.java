@@ -63,17 +63,25 @@ public class App {
     private static int amtPreviousSignaturesSHA256 = 0;
 
     private static boolean extendedMode = false;
+    private static boolean whitelistMode = false;
 
     public static final Set<String> arrExclusions = new HashSet<>();
 
     public static void main(String[] args) {
         if (args.length < 1 || args[0] == null || args[0].isBlank()) {
-            System.err.println("Usage: App <signature-directory> [-extended] [domain-file]");
+            System.err.println("Usage: App <signature-directory> [-extended] [-whitelist] [domain-file]");
             return;
         }
         final File signatureDirectory = new File(args[0]);
         if (!signatureDirectory.isDirectory() || !signatureDirectory.canRead()) {
             System.err.println("Signature directory does not exist or is not readable: " + signatureDirectory);
+            return;
+        }
+        whitelistMode = Arrays.stream(args).skip(1).anyMatch("-whitelist"::equals);
+        if (whitelistMode) {
+            //Known-good APK hashes (see WHITELIST.md): build ONLY the
+            //whitelist bloom, deduped against the current malware database.
+            generateWhitelist(args[0]);
             return;
         }
         extendedMode = Arrays.stream(args).skip(1).anyMatch("-extended"::equals);
@@ -275,6 +283,93 @@ public class App {
         }
     }
 
+    //Known-good APK hashes (WHITELIST.md): same serialised format as
+    //hypatia-sha256-bloom.bin but at a 1e-9 fpp (a false positive would
+    //silently whitelist a file), and every hash present in the current
+    //malware sha256 database is dropped before it enters the filter.
+    //
+    //The filter is sized AFTER a first pass counts the valid hashes
+    //(a fixed 3m-entry capacity would produce a ~16MB file that every
+    //phone re-downloads on each update; the real F-Droid + archive +
+    //IzzyOnDroid set is a few hundred thousand hashes, i.e. 1-3MB).
+    private static void generateWhitelist(String directory) {
+        final int minWhitelistCapacity = 100000; //100k
+        BloomFilter<String> signaturesMalwareSHA256 = null;
+        File referenceDatabase = new File(directory + "../production/hypatia-sha256-bloom.bin");
+        if (referenceDatabase.exists()) {
+            try {
+                System.out.println("Loading existing hypatia-sha256-bloom.bin database");
+                FileInputStream databaseLoading = new FileInputStream(referenceDatabase);
+                signaturesMalwareSHA256 = BloomFilter.readFrom(databaseLoading, Funnels.stringFunnel(Charsets.US_ASCII));
+                System.out.println("\tLoaded " + signaturesMalwareSHA256.approximateElementCount() + " malware signatures");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        } else {
+            System.out.println("WARNING: no reference malware database found - the whitelist will NOT be deduplicated against it!");
+        }
+
+        File[] databases = new File(directory).listFiles();
+        if (databases == null) {
+            System.err.println("Whitelist directory does not exist or is not readable: " + directory);
+            return;
+        }
+        Arrays.sort(databases);
+        System.out.println("Processing whitelist sources:");
+        int amtWhitelistRead = 0;
+        int amtWhitelistInvalid = 0;
+        int amtWhitelistInMalwareDB = 0;
+        Set<String> unique = new HashSet<>();
+        for (File databaseLocation : databases) {
+            if (!databaseLocation.isFile()) {
+                continue;
+            }
+            System.out.println("\t" + databaseLocation.getName());
+            int before = unique.size();
+            try (BufferedReader reader = new BufferedReader(new FileReader(databaseLocation))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String hash = line.trim().toLowerCase();
+                    if (hash.isEmpty() || hash.startsWith("#")) {
+                        continue;
+                    }
+                    if (hash.length() == 64 && isHexadecimal(hash)) {
+                        amtWhitelistRead++;
+                        if (signaturesMalwareSHA256 != null && signaturesMalwareSHA256.mightContain(hash)) {
+                            amtWhitelistInMalwareDB++;
+                            continue;
+                        }
+                        unique.add(hash);
+                    } else {
+                        amtWhitelistInvalid++;
+                        System.out.println("\t\tNOT A SHA-256: " + hash);
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            System.out.println("\t\tadded " + (unique.size() - before) + " sha256");
+        }
+        System.out.println("Whitelist read: " + amtWhitelistRead + ", unique kept: " + unique.size() + ", dropped (in malware DB): " + amtWhitelistInMalwareDB + ", invalid: " + amtWhitelistInvalid);
+
+        //Second pass: size the filter from the actual entry count (+10% headroom)
+        int whitelistCapacity = Math.max(minWhitelistCapacity, (int) (unique.size() * 1.1));
+        System.out.println("Whitelist filter capacity: " + whitelistCapacity + " (for " + unique.size() + " entries)");
+        BloomFilter<String> whitelist = BloomFilter.create(Funnels.stringFunnel(Charsets.US_ASCII), whitelistCapacity, 0.000000001);
+        for (String hash : unique) {
+            whitelist.put(hash);
+        }
+        System.out.println("Whitelist approximate count: " + whitelist.approximateElementCount() + " / capacity " + whitelistCapacity);
+        System.out.println("Whitelist expected false positive rate: " + whitelist.expectedFpp());
+        try {
+            FileOutputStream fileWhitelist = new FileOutputStream(new File(directory) + "/hypatia-whitelist-sha256-bloom.bin");
+            whitelist.writeTo(fileWhitelist);
+            fileWhitelist.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     //Credit: https://stackoverflow.com/a/13667522
     private static final Pattern HEXADECIMAL_PATTERN = Pattern.compile("\\p{XDigit}+");
 
@@ -344,7 +439,7 @@ public class App {
                 hashType ="sha1";
                 break;
             case 64:
-                hashType ="sha256";
+                hashType = "sha256";
                 break;
             default:
                 return false;

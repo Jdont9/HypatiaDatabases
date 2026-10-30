@@ -366,11 +366,11 @@ jobs:
           code=$(curl -sS -L --retry 2 --max-time 180 -H "Auth-Key: ${ABUSECH_KEY}" \
             -o "$dl" -w "%{http_code}" "https://urlhaus-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}/${URLHAUS_EXPORT_FILE}") || true
           if [ "$code" != "200" ] || [ ! -s "$dl" ] || head -c 200 "$dl" | grep -qi "<!DOCTYPE\|<html"; then
-            echo "::warning::URLhaus export failed (HTTP ${code}) - skipping."
+            echo "::warning::URLhaus export failed (HTTP $code) - skipping."
             exit 0
           fi
           if unzip -tq "$dl" >/dev/null 2>&1; then unzip -p "$dl" > "$dl.txt" && mv "$dl.txt" "$dl"; fi
-          python3 - "$dl" "$ws/various/urlhaus-hosts.txt" "$URLHAUS_ONLY_ONLINE" <<'PY'
+          python3 - "$dl" "$ws/various/urlhaus-hosts.txt" "${URLHAUS_ONLY_ONLINE}" <<'PY'
           import csv, re, sys
           from urllib.parse import urlparse
           src, out, only_online = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
@@ -491,7 +491,7 @@ jobs:
             -exec awk 1 {} + > "$ws/various/threatlabz-all.txt" 2>/dev/null || true
           for spec in "md5 32" "sha1 40" "sha256 64"; do
             set -- $spec
-            grep -aoE "\b[a-fA-F0-9]{$2}\b" "$ws/various/threatlabz-all.txt" | tr '[:upper:]' '[:lower:]' | sort -u > "$ws/various/threatlabz.$1" || true
+            grep -aoE "\b[a-fA-F0-9]{$2}\b" "$ws/various/threatlabz-all.txt" | tr "[:upper:]" "[:lower:]" | sort -u > "$ws/various/threatlabz.$1" || true
             [ -s "$ws/various/threatlabz.$1" ] && cp "$ws/various/threatlabz.$1" "$ws/raw/threatlabz.$1"
           done
           echo "ThreatLabz: md5 $(wc -l < "$ws/various/threatlabz.md5"), sha1 $(wc -l < "$ws/various/threatlabz.sha1"), sha256 $(wc -l < "$ws/various/threatlabz.sha256")."
@@ -649,6 +649,32 @@ jobs:
           echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             > "${{ github.workspace }}/various/database_generation_ci.txt"
 
+      # ---------------------------------------------------------
+      # WHITELIST DATABASE (optional, see WHITELIST.md): known-good APK
+      # sha256 from F-Droid (+ archive) and IzzyOnDroid, deduped against
+      # the current malware sha256 database, bloom at 1e-9 fpp.
+      # continue-on-error: the app treats this file as optional (404 tolerated).
+      - name: BUILD WHITELIST DATABASE (F-Droid + archive + IzzyOnDroid)
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          mkdir -p "$ws/raw-whitelist" "$ws/production"
+          python3 "$ws/tools/fdroid_hashes.py" --archive --izzy \
+            > "$ws/raw-whitelist/fdroid.sha256"
+          if [ ! -s "$ws/raw-whitelist/fdroid.sha256" ]; then
+            echo "::warning::No whitelist hashes extracted - skipping whitelist build."
+            exit 0
+          fi
+          # The whitelist must never contain a hash flagged by the malware DB:
+          # generateWhitelist() dedupes against ../production/hypatia-sha256-bloom.bin
+          cp "$ws/raw/hypatia-sha256-bloom.bin" "$ws/production/"
+          mvn -q -B --no-transfer-progress exec:java \
+            -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" \
+            -Dexec.args="$ws/raw-whitelist/ -whitelist" \
+            > "$ws/various/whitelist_report.txt" || true
+          cat "$ws/various/whitelist_report.txt" || true
+
       - name: Debug Info
         run: |
           ls -hla "${{ github.workspace }}/various/"
@@ -664,6 +690,11 @@ jobs:
           cp "${{ github.workspace }}/raw/hypatia-md5-bloom.bin" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/raw/hypatia-sha1-bloom.bin" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/raw/hypatia-sha256-bloom.bin" "${{ github.workspace }}/deploy"
+          if [ -f "${{ github.workspace }}/raw-whitelist/hypatia-whitelist-sha256-bloom.bin" ]; then
+            cp "${{ github.workspace }}/raw-whitelist/hypatia-whitelist-sha256-bloom.bin" "${{ github.workspace }}/deploy"
+          else
+            echo "::warning::No whitelist database produced - deploying without it (optional file)."
+          fi
           cp "${{ github.workspace }}/various/generation_report.html" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/various/database_generation_ci.txt" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/static/template.html" "${{ github.workspace }}/deploy"
