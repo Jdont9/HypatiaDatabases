@@ -92,7 +92,7 @@ jobs:
       # le cache reste toujours vivant.
       # ---------------------------------------------------------
       - name: Restore abuse.ch fallback cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ github.workspace }}/abusech-cache
           key: abusech-${{ github.run_id }}
@@ -221,7 +221,7 @@ jobs:
       # Enregistre le cache uniquement si au moins un téléchargement a réussi
       - name: Save abuse.ch fallback cache
         if: env.ABUSECH_CACHE_UPDATED == '1'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ github.workspace }}/abusech-cache
           key: abusech-${{ github.run_id }}
