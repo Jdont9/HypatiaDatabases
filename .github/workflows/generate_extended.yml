@@ -20,7 +20,7 @@ jobs:
           sudo apt install maven unzip git dos2unix -y
 
       - name: Start ClamAV daemon clamd
-        uses: toblux/start-clamd-github-action@v0.2.1
+        uses: toblux/start-clamd-github-action@v0.3
         with:
           db_main: true
           db_daily: true
