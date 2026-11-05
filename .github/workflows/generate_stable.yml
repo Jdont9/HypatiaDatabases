@@ -383,55 +383,6 @@ jobs:
           fi
           echo "Divest domains file: $(wc -l < "$output") lines."
 
-
-      # ---------------------------------------------------------
-      # Phishing.Database (ACTIVE domains)
-      # Primary: phish.co.za (official mirror)
-      # Fallbacks: GitHub raw + jsDelivr CDN when primary returns 5xx / timeout
-      # Output is appended to domains-extra.txt (same as other domain sources)
-      # ---------------------------------------------------------
-      - name: DATABASE PREPARATION - Phishing.Database domains
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          out="$ws/various/phishing-domains-ACTIVE.txt"
-          min_lines=1000
-          UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
-          urls=(
-            "https://phish.co.za/latest/phishing-domains-ACTIVE.txt"
-            "https://raw.githubusercontent.com/Phishing-Database/Phishing.Database/master/phishing-domains-ACTIVE.txt"
-            "https://cdn.jsdelivr.net/gh/Phishing-Database/Phishing.Database@master/phishing-domains-ACTIVE.txt"
-          )
-          ok=0
-          for url in "${urls[@]}"; do
-            echo "Trying Phishing.Database source: $url"
-            if curl -fsSL --max-time 180 --retry 2 --retry-delay 5 \
-                 -A "$UA" -o "$out.tmp" "$url" \
-               && [ -s "$out.tmp" ] \
-               && ! head -c 200 "$out.tmp" | grep -qi '<!DOCTYPE\|<html'; then
-              # Keep only plausible domain lines (strip comments / empties)
-              grep -E '^[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+$' "$out.tmp" \
-                | tr '[:upper:]' '[:lower:]' | sort -u > "$out" || true
-              n=$(wc -l < "$out")
-              if [ "$n" -ge "$min_lines" ]; then
-                echo "Phishing.Database: $n active domains from $url"
-                cat "$out" >> "$ws/various/domains-extra.txt"
-                ok=1
-                break
-              else
-                echo "::warning::Phishing.Database from $url: only $n lines (expected >= $min_lines), trying next."
-              fi
-            else
-              echo "::warning::Phishing.Database download failed for $url"
-            fi
-            rm -f "$out.tmp"
-          done
-          if [ "$ok" != 1 ]; then
-            echo "::warning::All Phishing.Database mirrors failed — skipping this source."
-          fi
-          rm -f "$out.tmp"
-
       - name: DATABASE PREPARATION - Zimperium IOC
         continue-on-error: true
         run: |
@@ -694,6 +645,58 @@ jobs:
           tr -d '\r' < "$dest" | grep -Ev '^[[:space:]]*(#|!|$)' | sed 's/^\*\.//' | tr '[:upper:]' '[:lower:]' \
             >> "$ws/various/domains-extra.txt"
           echo "Phishing domains: $(wc -l < "$dest") lines (sha256 verified)."
+
+      # OpenPhish: free community feed of phishing URLs (one per line).
+      # Hostnames are extracted and appended to domains-extra.txt (allowlist-filtered later).
+      - name: DATABASE PREPARATION - OpenPhish URLs
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          dest="$ws/various/openphish-feed.txt"
+          if curl -fsSL --retry 2 --max-time 180 "https://openphish.com/feed.txt" -o "$dest" \
+             && [ -s "$dest" ] \
+             && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
+            python3 - "$dest" "$ws/various/domains-extra.txt" <<'PY'
+          import re, sys
+          from urllib.parse import urlparse
+          src, out = sys.argv[1], sys.argv[2]
+          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+          hosts = set()
+          for line in open(src, errors="ignore"):
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              u = line if "://" in line else "http://" + line
+              h = (urlparse(u).hostname or "").lower().strip(".")
+              if h and not ip.match(h) and "." in h:
+                  hosts.add(h)
+          with open(out, "a") as f:
+              f.write("\n".join(sorted(hosts)) + ("\n" if hosts else ""))
+          print(f"OpenPhish: {len(hosts)} unique hostnames.")
+          PY
+          else
+            echo "::warning::OpenPhish feed unavailable - skipping."
+          fi
+
+      # phishunt.io: real-time phishing feed with enrichment (brand, IP, ASN, detection sources).
+      # The JSON feed is used and only the "domain" field is kept; appended to domains-extra.txt.
+      - name: DATABASE PREPARATION - phishunt.io (domains + enrichment)
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          dest="$ws/various/phishunt-feed.json"
+          if curl -fsSL --retry 2 --max-time 180 "https://phishunt.io/feed/feed.json" -o "$dest" \
+             && [ -s "$dest" ] \
+             && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
+            jq -r '.. | objects | select(has("domain")) | .domain' "$dest" 2>/dev/null \
+              | tr '[:upper:]' '[:lower:]' | sed 's/^\*\.//' | sort -u \
+              >> "$ws/various/domains-extra.txt" || true
+            echo "phishunt.io: domains appended to domains-extra.txt."
+          else
+            echo "::warning::phishunt.io feed unavailable - skipping."
+          fi
 
       # MalShare API. getlist only covers the LAST 24h and the schedule runs every
       # 2 days, so hashes are accumulated in cache/malshare.csv (committed to main
