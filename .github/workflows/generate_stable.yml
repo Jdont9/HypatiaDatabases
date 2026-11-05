@@ -689,18 +689,18 @@ jobs:
             echo "::warning::OpenPhish feed unavailable - skipping."
           fi
 
-      # phishunt.io: real-time phishing feed with enrichment (brand, IP, ASN, detection sources).
-      # The JSON feed is used and only the "domain" field is kept; appended to domains-extra.txt.
+      # phishunt.io API (/api/v1/domains): real-time phishing domains with enrichment
+      # (brand, IP, ASN, cert, detection verdicts). Only the "domain" field is kept; appended to domains-extra.txt.
       - name: DATABASE PREPARATION - phishunt.io (domains + enrichment)
         continue-on-error: true
         shell: bash
         run: |
           ws="${{ github.workspace }}"
-          dest="$ws/various/phishunt-feed.json"
-          if curl -fsSL --retry 2 --max-time 180 "https://phishunt.io/feed/feed.json" -o "$dest" \
+          dest="$ws/various/phishunt-api.json"
+          if curl -fsSL --retry 2 --max-time 180 "https://phishunt.io/api/v1/domains?format=json" -o "$dest" \
              && [ -s "$dest" ] \
              && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
-            jq -r '.. | objects | select(has("domain")) | .domain' "$dest" 2>/dev/null \
+            jq -r '.results[].domain' "$dest" 2>/dev/null \
               | tr '[:upper:]' '[:lower:]' | sed 's/^\*\.//' | sort -u \
               >> "$ws/various/domains-extra.txt" || true
             echo "phishunt.io: domains appended to domains-extra.txt."
