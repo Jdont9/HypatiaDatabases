@@ -1,1 +1,26 @@
-PLACEHOLDER
+name: Generate Stable Database
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1 */2 * *'
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    permissions: write-all
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Dependency Setup
+        run: |
+          sudo apt-get update -y
+          sudo apt install maven unzip git dos2unix pandoc -y
+
+      - name: Start ClamAV daemon clamd
+        uses: toblux/start-clamd-github-action@v0.3
+        with:
+          db_main: true
+          db_daily: true
