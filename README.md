@@ -16,7 +16,7 @@ This repo has several branches. The `main` branch contains the [code](.github/wo
 - [MalShare](https://malshare.com/) (API, accumulated daily; needs the `MALSHARE_KEY` secret)
 - [Zscaler ThreatLabz IOCs](https://github.com/threatlabz/iocs) (MIT)
 ### Specific Sources
-- [Stalkerware IOCs](https://github.com/AssoEchap/stalkerware-indicators)
+- [Stalkerware IOCs](https://github.com/AssoEchap/stalkerware-indicators) (sample hashes in the signature databases, plus package names and signing certificates in `hypatia-stalkerware-bloom.bin`, see `tools/stalkerware_indicators.py`)
 - [Covid-19 IOCs](https://github.com/avast/covid-19-ioc)
 - [Citizen Lab malware indicators](https://github.com/citizenlab/malware-indicators) (CC BY-NC-SA 4.0)
 ### Domain Sources

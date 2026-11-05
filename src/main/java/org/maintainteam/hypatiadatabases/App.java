@@ -69,7 +69,7 @@ public class App {
 
     public static void main(String[] args) {
         if (args.length < 1 || args[0] == null || args[0].isBlank()) {
-            System.err.println("Usage: App <signature-directory> [-extended] [-whitelist] [domain-file]");
+            System.err.println("Usage: App <signature-directory> [-extended] [-whitelist] [-stalkerware] [domain-file]");
             return;
         }
         final File signatureDirectory = new File(args[0]);
@@ -82,6 +82,12 @@ public class App {
             //Known-good APK hashes (see WHITELIST.md): build ONLY the
             //whitelist bloom, deduped against the current malware database.
             generateWhitelist(args[0]);
+            return;
+        }
+        if (Arrays.stream(args).skip(1).anyMatch("-stalkerware"::equals)) {
+            //Stalkerware package names + signing certificates (see tools/stalkerware_indicators.py):
+            //build ONLY the stalkerware bloom.
+            generateStalkerware(args[0]);
             return;
         }
         extendedMode = Arrays.stream(args).skip(1).anyMatch("-extended"::equals);
@@ -365,6 +371,71 @@ public class App {
             FileOutputStream fileWhitelist = new FileOutputStream(new File(directory) + "/hypatia-whitelist-sha256-bloom.bin");
             whitelist.writeTo(fileWhitelist);
             fileWhitelist.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    //Stalkerware indicators: lines "pkg:<package name>" and "cert:<hex SHA-1/SHA-256 of the signing
+    //certificate>". Same serialised format as the other databases (so it is downloaded, GPG-verified and
+    //loaded by the app like them) but at a 1e-9 fpp: the set is tiny (a few thousand entries, well under
+    //100kB) and a false positive would accuse an innocent app of being stalkerware.
+    private static void generateStalkerware(String directory) {
+        final int minCapacity = 1000;
+        File[] files = new File(directory).listFiles();
+        if (files == null) {
+            System.err.println("Stalkerware directory does not exist or is not readable: " + directory);
+            return;
+        }
+        Arrays.sort(files);
+        System.out.println("Processing stalkerware sources:");
+        Set<String> unique = new HashSet<>();
+        int amtPackages = 0;
+        int amtCertificates = 0;
+        int amtInvalid = 0;
+        for (File file : files) {
+            if (!file.isFile() || !file.getName().endsWith(".txt")) {
+                continue;
+            }
+            System.out.println("\t" + file.getName());
+            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    line = line.trim().toLowerCase();
+                    if (line.isEmpty() || line.startsWith("#")) {
+                        continue;
+                    }
+                    if (line.startsWith("pkg:") && line.substring(4).matches("[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+")) {
+                        if (unique.add(line)) amtPackages++;
+                    } else if (line.startsWith("cert:") && isHexadecimal(line.substring(5))
+                            && (line.length() == 5 + 40 || line.length() == 5 + 64)) {
+                        if (unique.add(line)) amtCertificates++;
+                    } else {
+                        amtInvalid++;
+                        System.out.println("\t\tINVALID: " + line);
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        System.out.println("Stalkerware packages: " + amtPackages + ", certificates: " + amtCertificates + ", invalid: " + amtInvalid);
+        if (unique.isEmpty()) {
+            System.err.println("No valid stalkerware indicator: nothing generated.");
+            return;
+        }
+        int capacity = Math.max(minCapacity, (int) (unique.size() * 1.5));
+        BloomFilter<String> stalkerware = BloomFilter.create(Funnels.stringFunnel(Charsets.US_ASCII), capacity, 0.000000001);
+        for (String entry : unique) {
+            stalkerware.put(entry);
+        }
+        System.out.println("Stalkerware approximate count: " + stalkerware.approximateElementCount() + " / capacity " + capacity);
+        System.out.println("Stalkerware expected false positive rate: " + stalkerware.expectedFpp());
+        try {
+            FileOutputStream fileStalkerware = new FileOutputStream(new File(directory) + "/hypatia-stalkerware-bloom.bin");
+            stalkerware.writeTo(fileStalkerware);
+            fileStalkerware.close();
         } catch (Exception e) {
             e.printStackTrace();
         }

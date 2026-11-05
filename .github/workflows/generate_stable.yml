@@ -769,6 +769,34 @@ jobs:
             > "$ws/various/whitelist_report.txt" || true
           cat "$ws/various/whitelist_report.txt" || true
 
+      # ---------------------------------------------------------
+      # STALKERWARE DATABASE (optional): package names + signing certificates from
+      # AssoEchap/stalkerware-indicators (samples.csv, already downloaded by the
+      # "Stalkerware" step above). Same bloom format, so the generic signing loop
+      # below (hypatia-*-bloom.bin) signs it; the app treats the file as optional.
+      # ---------------------------------------------------------
+      - name: BUILD STALKERWARE DATABASE (packages + certificates)
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          mkdir -p "$ws/raw-stalkerware"
+          if [ ! -s "$ws/various/stalkerware.csv" ]; then
+            echo "::warning::stalkerware.csv missing - skipping stalkerware database."
+            exit 0
+          fi
+          python3 "$ws/tools/stalkerware_indicators.py" --input "$ws/various/stalkerware.csv" \
+            > "$ws/raw-stalkerware/stalkerware.txt" || true
+          if [ ! -s "$ws/raw-stalkerware/stalkerware.txt" ]; then
+            echo "::warning::No stalkerware indicator extracted - skipping."
+            exit 0
+          fi
+          mvn -q -B --no-transfer-progress exec:java \
+            -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" \
+            -Dexec.args="$ws/raw-stalkerware/ -stalkerware" \
+            > "$ws/various/stalkerware_report.txt" || true
+          cat "$ws/various/stalkerware_report.txt" || true
+
       - name: Debug Info
         run: |
           ls -hla "${{ github.workspace }}/various/"
@@ -788,6 +816,11 @@ jobs:
             cp "${{ github.workspace }}/raw-whitelist/hypatia-whitelist-sha256-bloom.bin" "${{ github.workspace }}/deploy"
           else
             echo "::warning::No whitelist database produced - deploying without it (optional file)."
+          fi
+          if [ -f "${{ github.workspace }}/raw-stalkerware/hypatia-stalkerware-bloom.bin" ]; then
+            cp "${{ github.workspace }}/raw-stalkerware/hypatia-stalkerware-bloom.bin" "${{ github.workspace }}/deploy"
+          else
+            echo "::warning::No stalkerware database produced - deploying without it (optional file)."
           fi
           cp "${{ github.workspace }}/various/generation_report.html" "${{ github.workspace }}/deploy"
           cp "${{ github.workspace }}/various/database_generation_ci.txt" "${{ github.workspace }}/deploy"
