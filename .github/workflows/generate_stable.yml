@@ -347,12 +347,15 @@ jobs:
               for name in files:
                   raw = open(os.path.join(root, name), "rb").read()
                   text = None
-                  if name.lower().endswith((".mhtml", ".mht")) or raw[:5] == b"From:":
-                      msg = email.message_from_bytes(raw, policy=email.policy.default)
-                      for part in msg.walk():
-                          if part.get_content_type() == "text/html":
-                              text = part.get_content()
-                              break
+                  if name.lower().endswith((".mhtml", ".mht")) or raw[:5] == b"From":
+                      try:
+                          msg = email.message_from_bytes(raw, policy=email.policy.default)
+                          for part in msg.walk():
+                              if part.get_content_type() in ("text/html", "text/plain"):
+                                  text = part.get_content()
+                                  break
+                      except Exception:
+                          text = raw.decode("utf-8", "ignore")
                       if text is not None:
                           m = re.search(r"<pre[^>]*>(.*?)</pre>", text, re.S | re.I)
                           text = html.unescape(m.group(1) if m else re.sub(r"<[^>]+>", "", text))
@@ -383,6 +386,54 @@ jobs:
           fi
           echo "Divest domains file: $(wc -l < "$output") lines."
 
+      # ---------------------------------------------------------
+      # Phishing.Database (ACTIVE domains)
+      # Primary: phish.co.za (official mirror)
+      # Fallbacks: GitHub raw + jsDelivr CDN when primary returns 5xx / timeout
+      # Output is appended to domains-extra.txt (same as other domain sources)
+      # ---------------------------------------------------------
+      - name: DATABASE PREPARATION - Phishing.Database domains
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          out="$ws/various/phishing-domains-ACTIVE.txt"
+          min_lines=1000
+          UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+          urls=(
+            "https://phish.co.za/latest/phishing-domains-ACTIVE.txt"
+            "https://raw.githubusercontent.com/Phishing-Database/Phishing.Database/master/phishing-domains-ACTIVE.txt"
+            "https://cdn.jsdelivr.net/gh/Phishing-Database/Phishing.Database@master/phishing-domains-ACTIVE.txt"
+          )
+          ok=0
+          for url in "${urls[@]}"; do
+            echo "Trying Phishing.Database source: $url"
+            if curl -fsSL --max-time 180 --retry 2 --retry-delay 5 \
+                 -A "$UA" -o "$out.tmp" "$url" \
+               && [ -s "$out.tmp" ] \
+               && ! head -c 200 "$out.tmp" | grep -qi '<!DOCTYPE\|<html'; then
+              # Keep only plausible domain lines (strip comments / empties)
+              grep -E '^[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+$' "$out.tmp" \
+                | tr '[:upper:]' '[:lower:]' | sort -u > "$out" || true
+              n=$(wc -l < "$out")
+              if [ "$n" -ge "$min_lines" ]; then
+                echo "Phishing.Database: $n active domains from $url"
+                cat "$out" >> "$ws/various/domains-extra.txt"
+                ok=1
+                break
+              else
+                echo "::warning::Phishing.Database from $url: only $n lines (expected >= $min_lines), trying next."
+              fi
+            else
+              echo "::warning::Phishing.Database download failed for $url"
+            fi
+            rm -f "$out.tmp"
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::warning::All Phishing.Database mirrors failed — skipping this source."
+          fi
+          rm -f "$out.tmp"
+
       - name: DATABASE PREPARATION - Zimperium IOC
         continue-on-error: true
         run: |
@@ -400,580 +451,3 @@ jobs:
           find "${{ github.workspace }}/various/mvt/" -name "domains.txt" -exec cat {} + |
             sort -u >> "${{ github.workspace }}/various/domains-extra.txt"
           echo "MVT: $(wc -l < "${{ github.workspace }}/raw/mvt.sha256") sha256 signatures, domains appended."
-
-      - name: DATABASE PREPARATION - Amnesty Investigations
-        continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/amnestytech/investigations.git "${{ github.workspace }}/various/amnesty/"
-          grep -rhoE '^[a-fA-F0-9]{64}$' "${{ github.workspace }}/various/amnesty/" |
-            sort -u > "${{ github.workspace }}/raw/amnesty.sha256"
-          echo "Amnesty: $(wc -l < "${{ github.workspace }}/raw/amnesty.sha256") sha256 signatures."
-
-      # https://github.com/MaintainTeam/HypatiaDatabases/issues/20
-      # avast/ioc (Gen Threat Labs, DRL 1.1): hashes from samples.* files +
-      # domains from defanged text files (hxxps://, domain[.]tld).
-      - name: DATABASE PREPARATION - Avast IOC
-        continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/avast/ioc "${{ github.workspace }}/various/avast-ioc/"
-          avastdir="${{ github.workspace }}/various/avast-ioc"
-          # --- hashes ---
-          # awk guarantees one hash per line even if source files lack trailing newlines
-          find "$avastdir" -type f -name "samples.md5" -exec awk 1 {} + > "${{ github.workspace }}/various/avast.md5" || true
-          find "$avastdir" -type f -name "samples.sha1" -exec awk 1 {} + > "${{ github.workspace }}/various/avast.sha1" || true
-          find "$avastdir" -type f -name "samples.sha256" -exec awk 1 {} + > "${{ github.workspace }}/various/avast.sha256" || true
-          for h in md5 sha1 sha256; do
-            if [ -s "${{ github.workspace }}/various/avast.$h" ]; then
-              sort -u -o "${{ github.workspace }}/raw/avast.$h" "${{ github.workspace }}/various/avast.$h"
-            fi
-          done
-          # --- domains: defang (hxxp -> http, [.] -> .) then extract hostnames ---
-          find "$avastdir" -type f -name "*.txt" -exec cat {} + > "${{ github.workspace }}/various/avast-all.txt" 2>/dev/null || true
-          if [ -s "${{ github.workspace }}/various/avast-all.txt" ]; then
-            sed -e "s/hxxps/http/g" -e "s/hxxp/http/g" -e "s/\[:\]/:/g" -e "s/\[\.\]/./g" -e "s/\[,\]/,/g" \
-              "${{ github.workspace }}/various/avast-all.txt" \
-              | grep -oE "([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}" \
-              | tr "[:upper:]" "[:lower:]" | sort -u \
-              >> "${{ github.workspace }}/various/domains-extra.txt" || true
-            echo "Avast IOC: domains extracted from $(wc -l < "${{ github.workspace }}/various/avast-all.txt") lines."
-          fi
-      # abuse.ch URLhaus: the old public downloads (hostfile, csv_recent) now answer 401.
-      # New export API: https://urlhaus-api.abuse.ch/v2/files/exports/<AUTH-KEY>/<file>
-      # (same pattern as ThreatFox / MalwareBazaar). Needs the ABUSECH_KEY secret.
-      # recent.csv is used by default; if you see the exact name of the hostfile export
-      # when logged in on https://urlhaus.abuse.ch/api/, set URLHAUS_EXPORT_FILE to it
-      # (both CSV and hosts formats are parsed). Output: various/domains-extra.txt.
-      - name: DATABASE PREPARATION - URLhaus (export API)
-        continue-on-error: true
-        shell: bash
-        env:
-          ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
-          URLHAUS_EXPORT_FILE: recent.csv
-          URLHAUS_ONLY_ONLINE: "1"
-        run: |
-          ws="${{ github.workspace }}"
-          if [ -z "$ABUSECH_KEY" ]; then
-            echo "::warning::ABUSECH_KEY secret not set - skipping URLhaus."
-            exit 0
-          fi
-          dl="$ws/various/urlhaus-export.txt"
-          code=$(curl -sS -L --http1.1 --retry 3 --retry-all-errors --max-time 180 -H "Auth-Key: ${ABUSECH_KEY}" \
-            -o "$dl" -w "%{http_code}" "https://urlhaus-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}/${URLHAUS_EXPORT_FILE}") || true
-          if [ "$code" != "200" ] || [ ! -s "$dl" ] || head -c 200 "$dl" | grep -qi "<!DOCTYPE\|<html"; then
-            echo "::warning::URLhaus export failed (HTTP $code) - skipping."
-            exit 0
-          fi
-          if unzip -tq "$dl" >/dev/null 2>&1; then unzip -p "$dl" > "$dl.txt" && mv "$dl.txt" "$dl"; fi
-          python3 - "$dl" "$ws/various/urlhaus-hosts.txt" "${URLHAUS_ONLY_ONLINE}" <<'PY'
-          import csv, re, sys
-          from urllib.parse import urlparse
-          src, out, only_online = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
-          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
-          hosts = set()
-          for line in open(src, errors="ignore"):
-              line = line.strip()
-              if not line or line.startswith("#"):
-                  continue
-              fields = next(csv.reader([line]), [])
-              url = next((f for f in fields if re.match(r"^https?://", f, re.I)), None)
-              if url:
-                  status = next((f.lower() for f in fields if f.lower() in ("online", "offline")), "")
-                  if only_online and status == "offline":
-                      continue
-                  h = (urlparse(url).hostname or "").lower()
-              else:  # hosts format: "127.0.0.1<TAB>domain"
-                  parts = line.split()
-                  h = parts[1].lower() if len(parts) >= 2 and ip.match(parts[0]) else ""
-              if h and not ip.match(h) and "." in h:
-                  hosts.add(h)
-          open(out, "w").write("\n".join(sorted(hosts)) + ("\n" if hosts else ""))
-          print(f"URLhaus: {len(hosts)} unique hostnames (IPs excluded).")
-          PY
-          if [ -s "$ws/various/urlhaus-hosts.txt" ]; then
-            cat "$ws/various/urlhaus-hosts.txt" >> "$ws/various/domains-extra.txt"
-          fi
-
-      # GithubInfosec/latest-malware-IoC: SOC-curated IOCs from recent
-      # threat research (~36 campaigns: APT41, DarkGate, Medusa, ...).
-      # Hashes and domains are embedded in Markdown tables/text files.
-      - name: DATABASE PREPARATION - GithubInfosec IOC
-        continue-on-error: true
-        run: |
-          git clone --depth 1 https://github.com/GithubInfosec/latest-malware-IoC "${{ github.workspace }}/various/infosec-ioc/"
-          infodir="${{ github.workspace }}/various/infosec-ioc"
-          allmd="${{ github.workspace }}/various/infosec-all.md"
-          # Concatenate every Markdown IOC file (tables + text)
-          find "$infodir" -type f -name "*.md" -not -name "README.md" -exec cat {} + > "$allmd" 2>/dev/null || true
-          if [ -s "$allmd" ]; then
-            # --- hashes: plain hex strings of valid length ---
-            : > "${{ github.workspace }}/various/infosec.md5"; : > "${{ github.workspace }}/various/infosec.sha1"; : > "${{ github.workspace }}/various/infosec.sha256"
-            grep -oE "\b[a-fA-F0-9]{32}\b" "$allmd" | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/infosec.md5" || true
-            grep -oE "\b[a-fA-F0-9]{40}\b" "$allmd" | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/infosec.sha1" || true
-            grep -oE "\b[a-fA-F0-9]{64}\b" "$allmd" | tr "[:upper:]" "[:lower:]" | sort -u > "${{ github.workspace }}/various/infosec.sha256" || true
-            for h in md5 sha1 sha256; do
-              if [ -s "${{ github.workspace }}/various/infosec.$h" ]; then
-                cp "${{ github.workspace }}/various/infosec.$h" "${{ github.workspace }}/raw/infosec.$h"
-              fi
-            done
-            # --- domains: defang + extract, excluding file extensions ---
-            sed -e "s/hxxps/http/g" -e "s/hxxp/http/g" -e "s/\[\.\]/./g" -e "s/\[:\]/:/g" "$allmd" \
-              | grep -oE "([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}" \
-              | grep -vE "\.(dll|exe|tmp|pdf|bin|dat|jpg|png|gif|zip|rar|7z|ps1|bat|vbs|js|hta|jar|txt|md|csv|xls|xlsx|doc|docx|ppt|pptx|msi|scr|pif|lnk|iso|img|cab|sys)$" \
-              | tr "[:upper:]" "[:lower:]" | sort -u \
-              >> "${{ github.workspace }}/various/domains-extra.txt" || true
-            echo "GithubInfosec: md5 $(wc -l < "${{ github.workspace }}/various/infosec.md5"), sha1 $(wc -l < "${{ github.workspace }}/various/infosec.sha1"), sha256 $(wc -l < "${{ github.workspace }}/various/infosec.sha256") hashes."
-          fi
-      # Citizen Lab malware-indicators (spyware campaigns). Licence: CC BY-NC-SA 4.0
-      # (non-commercial, share-alike) - check it fits your distribution.
-      - name: DATABASE PREPARATION - Citizen Lab
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          git clone --depth 1 https://github.com/citizenlab/malware-indicators.git "$ws/various/citizenlab/"
-          python3 - "$ws/various/citizenlab" "$ws" <<'PY'
-          import csv, os, re, sys
-          from urllib.parse import urlparse
-          src, ws = sys.argv[1], sys.argv[2]
-          hexrx = {n: re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{%d}(?![0-9a-fA-F])" % n) for n in (32, 40, 64)}
-          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
-          dom = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z][a-z0-9-]{1,62}$")
-          hashes = {32: set(), 40: set(), 64: set()}
-          domains = set()
-          rows = 0
-          for root, _, files in os.walk(src):
-              for name in files:
-                  if not name.lower().endswith(".csv"):
-                      continue
-                  with open(os.path.join(root, name), newline="", encoding="utf-8", errors="ignore") as fh:
-                      for row in csv.DictReader(fh):
-                          r = {k.strip().lower(): (v or "").strip() for k, v in row.items() if k is not None and isinstance(v, (str, type(None)))}
-                          typ, val = r.get("type", "").lower(), r.get("value", "")
-                          if not val:
-                              continue
-                          rows += 1
-                          for n, rx in hexrx.items():
-                              for m in rx.findall(val):
-                                  hashes[n].add(m.lower())
-                          host = ""
-                          if typ in ("domain", "hostname") or typ.startswith(("domain|", "hostname|")):
-                              host = val.split("|")[0]
-                          elif typ == "url":
-                              host = urlparse(val if "://" in val else "http://" + val).hostname or ""
-                          host = host.lower().strip(".")
-                          if host and not ip.match(host) and dom.match(host):
-                              domains.add(host)
-          for n, ext in ((32, "md5"), (40, "sha1"), (64, "sha256")):
-              if hashes[n]:
-                  open(f"{ws}/raw/citizenlab.{ext}", "w").write("\n".join(sorted(hashes[n])) + "\n")
-          with open(f"{ws}/various/domains-extra.txt", "a") as f:
-              f.write("\n".join(sorted(domains)) + ("\n" if domains else ""))
-          print(f"Citizen Lab: {rows} rows, md5 {len(hashes[32])}, sha1 {len(hashes[40])}, sha256 {len(hashes[64])}, domains {len(domains)}")
-          if rows == 0:
-              print("::warning::Citizen Lab: no rows parsed (CSV columns 'type'/'value' not found?) - check the repo layout.")
-          PY
-
-      # Zscaler ThreatLabz IOCs (MIT). Hashes only: the files are free-form,
-      # domains would be too noisy. Note: the repo has been quiet since 2024.
-      - name: DATABASE PREPARATION - Zscaler ThreatLabz
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          git clone --depth 1 https://github.com/threatlabz/iocs.git "$ws/various/threatlabz/"
-          find "$ws/various/threatlabz/" -type f -not -path '*/.git/*' -not -iname '*.yar' -not -iname '*.yara' -not -iname 'LICENSE*' \
-            -exec awk 1 {} + > "$ws/various/threatlabz-all.txt" 2>/dev/null || true
-          for spec in "md5 32" "sha1 40" "sha256 64"; do
-            set -- $spec
-            grep -aoE "\b[a-fA-F0-9]{$2}\b" "$ws/various/threatlabz-all.txt" | tr "[:upper:]" "[:lower:]" | sort -u > "$ws/various/threatlabz.$1" || true
-            [ -s "$ws/various/threatlabz.$1" ] && cp "$ws/various/threatlabz.$1" "$ws/raw/threatlabz.$1"
-          done
-          echo "ThreatLabz: md5 $(wc -l < "$ws/various/threatlabz.md5"), sha1 $(wc -l < "$ws/various/threatlabz.sha1"), sha256 $(wc -l < "$ws/various/threatlabz.sha256")."
-
-      # HaGeZi Threat Intelligence Feeds (domains). Check the licence of the repo.
-      - name: DATABASE PREPARATION - HaGeZi TIF
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          dest="$ws/various/hagezi-tif.txt"
-          ok=0
-          for url in \
-            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/tif.txt" \
-            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif-onlydomains.txt"; do
-            if curl -fsSL --retry 2 --max-time 180 "$url" -o "$dest" && [ -s "$dest" ] && ! head -c 200 "$dest" | grep -qi "<!DOCTYPE\|<html"; then
-              ok=1; echo "HaGeZi TIF fetched from $url"; break
-            fi
-          done
-          if [ "$ok" != 1 ]; then echo "::warning::HaGeZi TIF unavailable - skipping."; exit 0; fi
-          tr -d '\r' < "$dest" | grep -Ev '^[[:space:]]*(#|!|$)' | sed 's/^\*\.//' | tr '[:upper:]' '[:lower:]' \
-            >> "$ws/various/domains-extra.txt"
-          echo "HaGeZi TIF: $(wc -l < "$dest") lines."
-
-      # Phishing hosts (domains) from Phishing.Database. The data files are hosted on
-      # phish.co.za/latest (the GitHub repo only holds the checksums and resets its history
-      # every 24h: never clone it). The sha256 published in Phishing-Database/checksums is
-      # verified before use. Appended to domains-extra.txt, so the hosts go through the same
-      # allowlist (Tranco top-N + MISP warninglists) and validation as the other extra sources.
-      # The app matches parent domains too, so a listed registrable domain blocks all of its
-      # subdomains: the allowlist must stay in front of this source. Check the licence.
-      - name: DATABASE PREPARATION - Phishing domains
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          dest="$ws/various/phishing-domains.txt"
-          url="https://phish.co.za/latest/phishing-domains-ACTIVE.txt"
-          sum_url="https://raw.githubusercontent.com/Phishing-Database/checksums/refs/heads/master/phishing-domains-ACTIVE.txt.sha256"
-          ok=0
-          for attempt in 1 2; do
-            if curl -fsSL --retry 2 --max-time 180 "$url" -o "$dest" && [ -s "$dest" ] \
-               && ! head -c 200 "$dest" | grep -qi "<!DOCTYPE\|<html" \
-               && expected=$(curl -fsSL --retry 2 --max-time 60 "$sum_url" | head -n1 | awk '{print $1}') \
-               && [ -n "$expected" ] \
-               && [ "$(sha256sum "$dest" | awk '{print $1}')" = "$expected" ]; then
-              ok=1; break
-            fi
-            # the checksum is published right after the file: give it a moment, then retry once
-            echo "Phishing domains: download or checksum check failed (attempt $attempt)."
-            [ "$attempt" = 1 ] && sleep 60
-          done
-          if [ "$ok" != 1 ]; then
-            echo "::warning::Phishing domains unavailable or checksum mismatch - skipping."
-            exit 0
-          fi
-          tr -d '\r' < "$dest" | grep -Ev '^[[:space:]]*(#|!|$)' | sed 's/^\*\.//' | tr '[:upper:]' '[:lower:]' \
-            >> "$ws/various/domains-extra.txt"
-          echo "Phishing domains: $(wc -l < "$dest") lines (sha256 verified)."
-
-      # MalShare API. getlist only covers the LAST 24h and the schedule runs every
-      # 2 days, so hashes are accumulated in cache/malshare.csv (committed to main
-      # by the last step). Format: first_seen,md5,sha1,sha256.
-      # Secret needed: MALSHARE_KEY. One getlist call per run (quota-friendly).
-      # sha256 -> stable DB; md5 is read by generate_extended.yml from the same cache.
-      - name: DATABASE PREPARATION - MalShare (API + accumulated cache)
-        continue-on-error: true
-        shell: bash
-        env:
-          MALSHARE_KEY: ${{ secrets.MALSHARE_KEY }}
-          # Optional: comma-separated MalShare file types (see action=gettypes) to keep
-          # the DB Android-relevant; empty = everything from getlist.
-          MALSHARE_TYPES: ""
-          MALSHARE_RETENTION_DAYS: "30"
-        run: |
-          ws="${{ github.workspace }}"
-          cache="$ws/cache/malshare.csv"
-          prev="$ws/various/malshare-prev.csv"
-          today="$ws/various/malshare-today.csv"
-          mkdir -p "$ws/cache-new"
-          [ -f "$cache" ] && cp "$cache" "$prev" || : > "$prev"
-          : > "$today"
-          if [ -z "$MALSHARE_KEY" ]; then
-            echo "::warning::MALSHARE_KEY secret not set - using cached MalShare data only."
-          else
-            fetch() {
-              curl -fsS --max-time 120 -G "https://malshare.com/api.php" \
-                --data-urlencode "api_key=${MALSHARE_KEY}" --data-urlencode "action=$1" ${2:+--data-urlencode "type=$2"}
-            }
-            parse() {
-              jq -r '.. | objects | select(has("sha256")) | [(.md5 // ""), (.sha1 // ""), (.sha256 // "")] | map(ascii_downcase) | join(",")'
-            }
-            if [ -n "$MALSHARE_TYPES" ]; then
-              IFS=',' read -ra types <<< "$MALSHARE_TYPES"
-              for t in "${types[@]}"; do fetch type "$t" | parse >> "$today" || echo "::warning::MalShare type '$t' failed."; done
-            else
-              fetch getlist | parse >> "$today" || echo "::warning::MalShare getlist failed (bad key or quota?)."
-            fi
-            sed -i "s/^/$(date -u +%F),/" "$today"
-            echo "MalShare: $(wc -l < "$today") hashes fetched today."
-          fi
-          # merge: keep first-seen date, drop invalid rows, prune by retention
-          cutoff=$(date -u -d "-${MALSHARE_RETENTION_DAYS} days" +%F)
-          cat "$prev" "$today" | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2},[a-f0-9]{0,32},[a-f0-9]{0,40},[a-f0-9]{64}$' \
-            | sort -t, -k1,1 | awk -F, '!seen[$4]++' | awk -F, -v c="$cutoff" '$1>=c' > "$ws/cache-new/malshare.csv" || true
-          if [ -s "$ws/cache-new/malshare.csv" ]; then
-            cut -d, -f4 "$ws/cache-new/malshare.csv" | sort -u > "$ws/raw/malshare.sha256"
-            echo "MalShare: $(wc -l < "$ws/raw/malshare.sha256") sha256 in DB (retention ${MALSHARE_RETENTION_DAYS}d)."
-            if ! cmp -s "$ws/cache-new/malshare.csv" "$cache"; then echo "MALSHARE_CACHE_UPDATED=1" >> "$GITHUB_ENV"; fi
-          fi
-
-      # Domain post-processing: extra sources (MVT, Avast, URLhaus, Infosec, Citizen Lab,
-      # HaGeZi) are written to various/domains-extra.txt, filtered against an allowlist
-      # (Tranco top-N + MISP warninglists), validated, then appended to divested.txt.
-      # The Divest list itself is NOT filtered (behaviour unchanged).
-      # If the allowlist cannot be built, extras are NOT merged (avoids false positives).
-      - name: DOMAIN POST-PROCESSING - allowlist and merge
-        continue-on-error: true
-        shell: bash
-        env:
-          TRANCO_TOP: "10000"
-        run: |
-          ws="${{ github.workspace }}"
-          allow="$ws/various/allowlist.txt"
-          : > "$allow"
-          if curl -fsSL -L --retry 2 --max-time 180 "https://tranco-list.eu/top-1m.csv.zip" -o /tmp/tranco.zip \
-             && unzip -p /tmp/tranco.zip top-1m.csv > /tmp/tranco.csv; then
-            head -n "$TRANCO_TOP" /tmp/tranco.csv | cut -d, -f2 | tr -d '\r' >> "$allow"
-          else
-            echo "::warning::Tranco download failed."
-          fi
-          git clone --depth 1 https://github.com/MISP/misp-warninglists.git "$ws/various/misp-warninglists" || true
-          for l in tranco10k moz-top500 common-ioc-false-positive microsoft google apple; do
-            f="$ws/various/misp-warninglists/lists/$l/list.json"
-            if [ -f "$f" ]; then jq -r '.list[]? | strings' "$f" >> "$allow" || true; else echo "MISP list '$l' not found, skipped."; fi
-          done
-          if python3 - "$ws" <<'PY'
-          import os, re, sys
-          ws = sys.argv[1]
-          allow = set()
-          for l in open(f"{ws}/various/allowlist.txt", errors="ignore"):
-              d = l.strip().lower().lstrip("*.").rstrip(".")
-              if d:
-                  allow.add(d)
-          if len(allow) < 1000:
-              print(f"Allowlist too small ({len(allow)}).")
-              sys.exit(2)
-          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
-          dom = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z][a-z0-9-]{1,62}$")
-          kept, dropped, invalid = set(), [], 0
-          for l in open(f"{ws}/various/domains-extra.txt", errors="ignore"):
-              d = l.strip().lower()
-              if not d or d.startswith(("#", "!")):
-                  continue
-              d = d.split()[-1].lstrip("*.").rstrip(".")
-              if ip.match(d) or not dom.match(d):
-                  invalid += 1
-                  continue
-              base = d[4:] if d.startswith("www.") else d
-              if d in allow or base in allow:
-                  dropped.append(d)
-                  continue
-              kept.add(d)
-          out = f"{ws}/domains/divested.txt"
-          needs_nl = os.path.exists(out) and os.path.getsize(out) > 0 and not open(out, "rb").read()[-1:] == b"\n"
-          with open(out, "a") as f:
-              if needs_nl:
-                  f.write("\n")
-              f.write("\n".join(sorted(kept)) + ("\n" if kept else ""))
-          print(f"Extra domains: kept {len(kept)}, allowlisted {len(set(dropped))}, invalid {invalid}, allowlist size {len(allow)}.")
-          print("Sample allowlisted (review for surprises):", sorted(set(dropped))[:40])
-          PY
-          then
-            echo "Merged extra domains into divested.txt: $(wc -l < "$ws/domains/divested.txt") total lines."
-          else
-            echo "::warning::Allowlist step failed - extra domain sources were NOT merged."
-          fi
-
-      - name: GENERATE HYPATIA SIGNATURE DATABASES
-        run: |
-          mvn -q -B --no-transfer-progress clean compile exec:java \
-            -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" \
-            -Dexec.args="${{ github.workspace }}/raw/ ${{ github.workspace }}/domains/divested.txt" \
-            > "${{ github.workspace }}/various/generation_report.txt"
-
-          cat "${{ github.workspace }}/various/generation_report.txt"
-          echo "<pre>" >> "${{ github.workspace }}/various/generation_report.html"
-          cat "${{ github.workspace }}/various/generation_report.txt" >> "${{ github.workspace }}/various/generation_report.html"
-          echo "</pre>" >> "${{ github.workspace }}/various/generation_report.html"
-
-          echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            > "${{ github.workspace }}/various/database_generation_ci.txt"
-
-      # ---------------------------------------------------------
-      # WHITELIST DATABASE (optional, see WHITELIST.md): known-good APK
-      # sha256 from F-Droid (+ archive) and IzzyOnDroid, deduped against
-      # the current malware sha256 database, bloom at 1e-9 fpp.
-      # continue-on-error: the app treats this file as optional (404 tolerated).
-      - name: BUILD WHITELIST DATABASE (F-Droid + archive + IzzyOnDroid)
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          mkdir -p "$ws/raw-whitelist" "$ws/production"
-          python3 "$ws/tools/fdroid_hashes.py" --archive --izzy \
-            > "$ws/raw-whitelist/fdroid.sha256"
-          if [ ! -s "$ws/raw-whitelist/fdroid.sha256" ]; then
-            echo "::warning::No whitelist hashes extracted - skipping whitelist build."
-            exit 0
-          fi
-          # The whitelist must never contain a hash flagged by the malware DB:
-          # generateWhitelist() dedupes against ../production/hypatia-sha256-bloom.bin
-          cp "$ws/raw/hypatia-sha256-bloom.bin" "$ws/production/"
-          mvn -q -B --no-transfer-progress exec:java \
-            -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" \
-            -Dexec.args="$ws/raw-whitelist/ -whitelist" \
-            > "$ws/various/whitelist_report.txt" || true
-          cat "$ws/various/whitelist_report.txt" || true
-
-      # ---------------------------------------------------------
-      # STALKERWARE DATABASE (optional): package names + signing certificates from
-      # AssoEchap/stalkerware-indicators (samples.csv, already downloaded by the
-      # "Stalkerware" step above). Same bloom format, so the generic signing loop
-      # below (hypatia-*-bloom.bin) signs it; the app treats the file as optional.
-      # ---------------------------------------------------------
-      - name: BUILD STALKERWARE DATABASE (packages + certificates)
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          mkdir -p "$ws/raw-stalkerware"
-          if [ ! -s "$ws/various/stalkerware.csv" ]; then
-            echo "::warning::stalkerware.csv missing - skipping stalkerware database."
-            exit 0
-          fi
-          python3 "$ws/tools/stalkerware_indicators.py" --input "$ws/various/stalkerware.csv" \
-            > "$ws/raw-stalkerware/stalkerware.txt" || true
-          if [ ! -s "$ws/raw-stalkerware/stalkerware.txt" ]; then
-            echo "::warning::No stalkerware indicator extracted - skipping."
-            exit 0
-          fi
-          mvn -q -B --no-transfer-progress exec:java \
-            -Dexec.mainClass="org.maintainteam.hypatiadatabases.App" \
-            -Dexec.args="$ws/raw-stalkerware/ -stalkerware" \
-            > "$ws/various/stalkerware_report.txt" || true
-          cat "$ws/various/stalkerware_report.txt" || true
-
-      - name: Debug Info
-        run: |
-          ls -hla "${{ github.workspace }}/various/"
-          ls -hla "${{ github.workspace }}/raw/"
-          ls -hla "${{ github.workspace }}/exclusions/"
-          ls -hla "${{ github.workspace }}/domains/"
-          tree -a "${{ github.workspace }}"
-
-      - name: Select files to use
-        run: |
-          mkdir -p "${{ github.workspace }}/deploy"
-          cp "${{ github.workspace }}/raw/hypatia-domains-bloom.bin" "${{ github.workspace }}/deploy"
-          cp "${{ github.workspace }}/raw/hypatia-md5-bloom.bin" "${{ github.workspace }}/deploy"
-          cp "${{ github.workspace }}/raw/hypatia-sha1-bloom.bin" "${{ github.workspace }}/deploy"
-          cp "${{ github.workspace }}/raw/hypatia-sha256-bloom.bin" "${{ github.workspace }}/deploy"
-          if [ -f "${{ github.workspace }}/raw-whitelist/hypatia-whitelist-sha256-bloom.bin" ]; then
-            cp "${{ github.workspace }}/raw-whitelist/hypatia-whitelist-sha256-bloom.bin" "${{ github.workspace }}/deploy"
-          else
-            echo "::warning::No whitelist database produced - deploying without it (optional file)."
-          fi
-          if [ -f "${{ github.workspace }}/raw-stalkerware/hypatia-stalkerware-bloom.bin" ]; then
-            cp "${{ github.workspace }}/raw-stalkerware/hypatia-stalkerware-bloom.bin" "${{ github.workspace }}/deploy"
-          else
-            echo "::warning::No stalkerware database produced - deploying without it (optional file)."
-          fi
-          cp "${{ github.workspace }}/various/generation_report.html" "${{ github.workspace }}/deploy"
-          cp "${{ github.workspace }}/various/database_generation_ci.txt" "${{ github.workspace }}/deploy"
-          cp "${{ github.workspace }}/static/template.html" "${{ github.workspace }}/deploy"
-          date > "${{ github.workspace }}/deploy/generation_time.html"
-
-      # ---------------------------------------------------------
-      #  CORRECTION GPG — version stable pour GitHub Actions
-      # ---------------------------------------------------------
-      - name: Sign databases (if GPG_PRIVATE_KEY secret is set)
-        shell: bash
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          deploy="${{ github.workspace }}/deploy"
-
-          if [ -n "$GPG_PRIVATE_KEY" ]; then
-            echo "Importing signing key from secret..."
-
-            export GNUPGHOME="$(mktemp -d)"
-            chmod 700 "$GNUPGHOME"
-            echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
-
-            keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
-
-            for f in "$deploy"/hypatia-*-bloom.bin; do
-              # NB: .sig MUST be binary (no --armor): Hypatia parses it
-              # with PGPObjectFactory, which cannot decode armored input.
-              gpg --batch --yes --pinentry-mode loopback \
-                  --passphrase "$GPG_PASSPHRASE" \
-                  --detach-sign \
-                  --local-user "$keyid" \
-                  --output "$f.sig" "$f"
-            done
-
-            gpg --batch --armor --export "$keyid" > "$deploy/gpg.key"
-
-            # Self-check: every .sig must verify against its .bin before deploy
-            for f in "$deploy"/hypatia-*-bloom.bin; do
-              gpg --batch --yes --verify "$f.sig" "$f" || { echo "::error::GPG verification failed for $f"; exit 1; }
-            done
-            echo "Self-check passed: all signatures verify."
-            echo "Signed databases with key $keyid"
-            echo "SIGNING_KEY_FOR_APP=$keyid" >> "$GITHUB_STEP_SUMMARY"
-
-            # Upstream-identical index metadata files
-            shortid="${keyid: -16}"
-            signer=$(gpg --list-secret-keys --with-colons | awk -F: '/^uid/{print $10; exit}' | grep -oE '<[^>]+>' | head -1 | tr -d '<>')
-            echo "$shortid" > "$deploy/sign_key.txt"
-            echo "$signer" > "$deploy/signer.txt"
-            date > "$deploy/sign_time.html"
-
-          else
-            echo "::warning::GPG_PRIVATE_KEY secret not set — deploying unsigned."
-            cp "${{ github.workspace }}/gpg.key" "$deploy/" || true
-            cp "${{ github.workspace }}"/*.bin.sig "$deploy/" 2>/dev/null || true
-          fi
-
-      # Replicates the index page of maintainteam.github.io/HypatiaDatabases:
-      # file tree (tree -s -D), signing info, then the stats template.
-      # Rendered to HTML with pandoc: no Jekyll needed, so the .nojekyll
-      # file that peaceiris recreates on every deploy is harmless.
-      - name: Build index.html (upstream-identical page layout)
-        shell: bash
-        run: |
-          deploy="${{ github.workspace }}/deploy"
-          shortid=$(cat "$deploy/sign_key.txt" 2>/dev/null || echo "unknown")
-          signer=$(cat "$deploy/signer.txt" 2>/dev/null || echo "unknown")
-          cd "$deploy"
-          {
-            echo "# Files"
-            echo ""
-            tree -a -s -D --timefmt='%d-%b-%Y %H:%M' . | sed 's/$/  /'
-            echo ""
-            echo "* * *"
-            echo ""
-            echo "Signing Key: $shortid  "
-            echo "Signed by: $signer  "
-            echo "Current Databases created with: CI  "
-            echo "Signed & Created Report with GitHub Actions CI"
-            echo ""
-            echo "* * *"
-            echo ""
-            cat "$deploy/template.html"
-          } > "$deploy/index.md"
-          pandoc "$deploy/index.md" -o "$deploy/index.html"
-          rm -f "$deploy/index.md"
-
-      - name: Deploy to unsigned branch
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: "${{ github.workspace }}/deploy"
-          # force_orphan must stay false: the unsigned branch also hosts the
-          # extended md5 database deployed by generate_extended.yml
-          force_orphan: false
-          keep_files: true
-          publish_branch: unsigned
-
-      - name: Commit refreshed caches (divest.zip, malshare)
-        if: env.DIVEST_CACHE_UPDATED == '1' || env.MALSHARE_CACHE_UPDATED == '1'
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout -B main origin/main
-          if [ "$DIVEST_CACHE_UPDATED" = "1" ]; then
-            cp "${{ github.workspace }}/cache-new/divest.zip" "${{ github.workspace }}/divest.zip"
-            git add divest.zip
-          fi
-          if [ "$MALSHARE_CACHE_UPDATED" = "1" ]; then
-            mkdir -p cache
-            cp "${{ github.workspace }}/cache-new/malshare.csv" cache/malshare.csv
-            git add cache/malshare.csv
-          fi
-          git commit -m "Refresh caches [skip ci]" || exit 0
-          git push origin main
