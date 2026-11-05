@@ -656,6 +656,58 @@ jobs:
             >> "$ws/various/domains-extra.txt"
           echo "Phishing.Database domains: $(wc -l < "$dest") lines appended (sha256 verified when available)."
 
+      # OpenPhish: free community feed of phishing URLs (one per line).
+      # Hostnames are extracted and appended to domains-extra.txt (allowlist-filtered later).
+      - name: DATABASE PREPARATION - OpenPhish URLs
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          dest="$ws/various/openphish-feed.txt"
+          if curl -fsSL --retry 2 --max-time 180 "https://openphish.com/feed.txt" -o "$dest" \
+             && [ -s "$dest" ] \
+             && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
+            python3 - "$dest" "$ws/various/domains-extra.txt" <<'PY'
+          import re, sys
+          from urllib.parse import urlparse
+          src, out = sys.argv[1], sys.argv[2]
+          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+          hosts = set()
+          for line in open(src, errors="ignore"):
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              u = line if "://" in line else "http://" + line
+              h = (urlparse(u).hostname or "").lower().strip(".")
+              if h and not ip.match(h) and "." in h:
+                  hosts.add(h)
+          with open(out, "a") as f:
+              f.write("\n".join(sorted(hosts)) + ("\n" if hosts else ""))
+          print(f"OpenPhish: {len(hosts)} unique hostnames.")
+          PY
+          else
+            echo "::warning::OpenPhish feed unavailable - skipping."
+          fi
+
+      # phishunt.io: real-time phishing feed with enrichment (brand, IP, ASN, detection sources).
+      # The JSON feed is used and only the "domain" field is kept; appended to domains-extra.txt.
+      - name: DATABASE PREPARATION - phishunt.io (domains + enrichment)
+        continue-on-error: true
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          dest="$ws/various/phishunt-feed.json"
+          if curl -fsSL --retry 2 --max-time 180 "https://phishunt.io/feed/feed.json" -o "$dest" \
+             && [ -s "$dest" ] \
+             && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
+            jq -r '.. | objects | select(has("domain")) | .domain' "$dest" 2>/dev/null \
+              | tr '[:upper:]' '[:lower:]' | sed 's/^\*\.//' | sort -u \
+              >> "$ws/various/domains-extra.txt" || true
+            echo "phishunt.io: domains appended to domains-extra.txt."
+          else
+            echo "::warning::phishunt.io feed unavailable - skipping."
+          fi
+
       # MalShare API. getlist only covers the LAST 24h and the schedule runs every
       # 2 days, so hashes are accumulated in cache/malshare.csv (committed to main
       # by the last step). Format: first_seen,md5,sha1,sha256.
