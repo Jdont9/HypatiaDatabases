@@ -612,91 +612,49 @@ jobs:
 
       # Phishing hosts (domains) from Phishing.Database. The data files are hosted on
       # phish.co.za/latest (the GitHub repo only holds the checksums and resets its history
-      # every 24h: never clone it). The sha256 published in Phishing-Database/checksums is
-      # verified before use. Appended to domains-extra.txt, so the hosts go through the same
-      # allowlist (Tranco top-N + MISP warninglists) and validation as the other extra sources.
+      # every 24h: never clone it). Multi-URL fallback (phish.co.za -> GitHub raw -> jsDelivr)
+      # when a mirror fails; the sha256 published in Phishing-Database/checksums is verified
+      # before use. Appended to domains-extra.txt, so the hosts go through the same allowlist
+      # (Tranco top-N + MISP warninglists) and validation as the other extra sources.
       # The app matches parent domains too, so a listed registrable domain blocks all of its
       # subdomains: the allowlist must stay in front of this source. Check the licence.
-      - name: DATABASE PREPARATION - Phishing domains
+      - name: DATABASE PREPARATION - Phishing.Database domains
         continue-on-error: true
         shell: bash
         run: |
           ws="${{ github.workspace }}"
           dest="$ws/various/phishing-domains.txt"
-          url="https://phish.co.za/latest/phishing-domains-ACTIVE.txt"
           sum_url="https://raw.githubusercontent.com/Phishing-Database/checksums/refs/heads/master/phishing-domains-ACTIVE.txt.sha256"
+          UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+          urls=(
+            "https://phish.co.za/latest/phishing-domains-ACTIVE.txt"
+            "https://raw.githubusercontent.com/Phishing-Database/Phishing.Database/master/phishing-domains-ACTIVE.txt"
+            "https://cdn.jsdelivr.net/gh/Phishing-Database/Phishing.Database@master/phishing-domains-ACTIVE.txt"
+          )
           ok=0
-          for attempt in 1 2; do
-            if curl -fsSL --retry 2 --max-time 180 "$url" -o "$dest" && [ -s "$dest" ] \
-               && ! head -c 200 "$dest" | grep -qi "<!DOCTYPE\|<html" \
-               && expected=$(curl -fsSL --retry 2 --max-time 60 "$sum_url" | head -n1 | awk '{print $1}') \
-               && [ -n "$expected" ] \
-               && [ "$(sha256sum "$dest" | awk '{print $1}')" = "$expected" ]; then
+          expected=$(curl -fsSL --retry 2 --max-time 60 "$sum_url" | head -n1 | awk '{print $1}') || expected=""
+          for url in "${urls[@]}"; do
+            echo "Trying Phishing.Database source: $url"
+            if curl -fsSL --retry 2 --max-time 180 -A "$UA" "$url" -o "$dest" && [ -s "$dest" ] \
+               && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
+              # verify sha256 when the published checksum is available
+              if [ -n "$expected" ] && [ "$(sha256sum "$dest" | awk '{print $1}')" != "$expected" ]; then
+                echo "::warning::Phishing.Database from $url: checksum mismatch - trying next mirror."
+                rm -f "$dest"
+                continue
+              fi
               ok=1; break
             fi
-            # the checksum is published right after the file: give it a moment, then retry once
-            echo "Phishing domains: download or checksum check failed (attempt $attempt)."
-            [ "$attempt" = 1 ] && sleep 60
+            echo "::warning::Phishing.Database download failed for $url"
+            rm -f "$dest"
           done
           if [ "$ok" != 1 ]; then
-            echo "::warning::Phishing domains unavailable or checksum mismatch - skipping."
+            echo "::warning::All Phishing.Database mirrors failed - skipping this source."
             exit 0
           fi
           tr -d '\r' < "$dest" | grep -Ev '^[[:space:]]*(#|!|$)' | sed 's/^\*\.//' | tr '[:upper:]' '[:lower:]' \
             >> "$ws/various/domains-extra.txt"
-          echo "Phishing domains: $(wc -l < "$dest") lines (sha256 verified)."
-
-      # OpenPhish: free community feed of phishing URLs (one per line).
-      # Hostnames are extracted and appended to domains-extra.txt (allowlist-filtered later).
-      - name: DATABASE PREPARATION - OpenPhish URLs
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          dest="$ws/various/openphish-feed.txt"
-          if curl -fsSL --retry 2 --max-time 180 "https://openphish.com/feed.txt" -o "$dest" \
-             && [ -s "$dest" ] \
-             && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
-            python3 - "$dest" "$ws/various/domains-extra.txt" <<'PY'
-          import re, sys
-          from urllib.parse import urlparse
-          src, out = sys.argv[1], sys.argv[2]
-          ip = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
-          hosts = set()
-          for line in open(src, errors="ignore"):
-              line = line.strip()
-              if not line or line.startswith("#"):
-                  continue
-              u = line if "://" in line else "http://" + line
-              h = (urlparse(u).hostname or "").lower().strip(".")
-              if h and not ip.match(h) and "." in h:
-                  hosts.add(h)
-          with open(out, "a") as f:
-              f.write("\n".join(sorted(hosts)) + ("\n" if hosts else ""))
-          print(f"OpenPhish: {len(hosts)} unique hostnames.")
-          PY
-          else
-            echo "::warning::OpenPhish feed unavailable - skipping."
-          fi
-
-      # phishunt.io: real-time phishing feed with enrichment (brand, IP, ASN, detection sources).
-      # The JSON feed is used and only the "domain" field is kept; appended to domains-extra.txt.
-      - name: DATABASE PREPARATION - phishunt.io (domains + enrichment)
-        continue-on-error: true
-        shell: bash
-        run: |
-          ws="${{ github.workspace }}"
-          dest="$ws/various/phishunt-feed.json"
-          if curl -fsSL --retry 2 --max-time 180 "https://phishunt.io/feed/feed.json" -o "$dest" \
-             && [ -s "$dest" ] \
-             && ! head -c 200 "$dest" | grep -qi '<!DOCTYPE\|<html'; then
-            jq -r '.. | objects | select(has("domain")) | .domain' "$dest" 2>/dev/null \
-              | tr '[:upper:]' '[:lower:]' | sed 's/^\*\.//' | sort -u \
-              >> "$ws/various/domains-extra.txt" || true
-            echo "phishunt.io: domains appended to domains-extra.txt."
-          else
-            echo "::warning::phishunt.io feed unavailable - skipping."
-          fi
+          echo "Phishing.Database domains: $(wc -l < "$dest") lines appended (sha256 verified when available)."
 
       # MalShare API. getlist only covers the LAST 24h and the schedule runs every
       # 2 days, so hashes are accumulated in cache/malshare.csv (committed to main
