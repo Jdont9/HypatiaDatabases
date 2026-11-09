@@ -30,7 +30,7 @@ Processing signatures:
 		Skipping excluded hash: a7925c63f1198b69f051392722643e07
 		md5: 20402, sha1: 0, sha256: 0
 	malshare.md5
-		md5: 127, sha1: 0, sha256: 0
+		md5: 159, sha1: 0, sha256: 0
 	sanesecurity-bofhland_malware_attach.hdb
 		md5: 1812, sha1: 0, sha256: 0
 	sanesecurity-crdfam.clamav.hdb
@@ -40,11 +40,11 @@ Processing signatures:
 	sanesecurity-malware.expert.hdb
 		md5: 1, sha1: 0, sha256: 0
 	sanesecurity-rogue.hdb
-		md5: 0, sha1: 0, sha256: 997
+		md5: 0, sha1: 0, sha256: 1005
 	sanesecurity-spamattach.hdb
 		md5: 0, sha1: 0, sha256: 14
 	sanesecurity-spamimg.hdb
-		md5: 0, sha1: 0, sha256: 956
+		md5: 0, sha1: 0, sha256: 959
 	sanesecurity-winnow.attachments.hdb
 		md5: 0, sha1: 0, sha256: 0
 	sanesecurity-winnow_bad_cw.hdb
@@ -56,14 +56,14 @@ Processing signatures:
 	targetedthreats.hdb
 		md5: 239, sha1: 0, sha256: 0
 	threatview.md5
-		md5: 6, sha1: 0, sha256: 0
-Lines read: valid: 30800, invalid: 0
-Read count: md5: 28775, sha1: 0, sha256: 2025, domains: 0
-Added count: md5: 28728, sha1: 0, sha256: 1978, domains: 0
-Approximate count: md5: 28727, sha1: 0, sha256: 1978, domains: 0
+		md5: 0, sha1: 0, sha256: 0
+Lines read: valid: 30837, invalid: 0
+Read count: md5: 28801, sha1: 0, sha256: 2036, domains: 0
+Added count: md5: 28754, sha1: 0, sha256: 1989, domains: 0
+Approximate count: md5: 28753, sha1: 0, sha256: 1989, domains: 0
 Max amount: md5: 7600000, sha1: 100000, sha256: 2200000, domains: 6000000
-Fill amount: md5: 0.378%, sha1: 0.0%, sha256: 0.08990909%, domains: 0.0%
-App reported count: 30705
-Expected false postive rate: md5: 1.8741041221333621E-44, sha1: 0.0, sha256: 4.7523376137449045E-55, domains: 0.0
+Fill amount: md5: 0.3783421%, sha1: 0.0%, sha256: 0.090409085%, domains: 0.0%
+App reported count: 30742
+Expected false postive rate: md5: 1.903055734186177E-44, sha1: 0.0, sha256: 5.222397657199389E-55, domains: 0.0
 Testing exclusions:
 	No exclusions found :)
