@@ -77,3 +77,4 @@ jobs:
           path: |
             ${{ github.workspace }}/reports/
           retention-days: 30
+          if-no-files-found: ignore
