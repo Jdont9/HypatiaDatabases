@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '0 1 * * *'
 
-# Évite deux runs en parallèle (cache abuse.ch, déploiement gh-pages, commit des caches)
+# Ãvite deux runs en parallÃ¨le (cache abuse.ch, dÃ©ploiement gh-pages, commit des caches)
 concurrency:
   group: hypatia-generate
   cancel-in-progress: false
@@ -93,16 +93,16 @@ jobs:
           for t in md5 sha1; do
             n=$(wc -l < "${{ github.workspace }}/raw/threatview.$t")
             echo "ThreatView $t: $n lignes."
-            [ "$n" -ge 10 ] || echo "::warning::ThreatView $t : seulement $n lignes (flux vide ou limité ?)."
+            [ "$n" -ge 10 ] || echo "::warning::ThreatView $t : seulement $n lignes (flux vide ou limitÃ© ?)."
           done
 
       # ---------------------------------------------------------
       # Cache de secours abuse.ch (ThreatFox + MalwareBazaar).
-      # Stocké dans le cache GitHub Actions (pas dans le repo : la liste
-      # MalwareBazaar complète pèse des dizaines de Mo une fois compressée).
-      # Chaque run réussi enregistre une nouvelle entrée ; au run suivant on
-      # restaure la plus récente (restore-keys). Les entrées non utilisées
-      # pendant 7 jours sont purgées par GitHub : avec un run quotidien,
+      # StockÃ© dans le cache GitHub Actions (pas dans le repo : la liste
+      # MalwareBazaar complÃ¨te pÃ¨se des dizaines de Mo une fois compressÃ©e).
+      # Chaque run rÃ©ussi enregistre une nouvelle entrÃ©e ; au run suivant on
+      # restaure la plus rÃ©cente (restore-keys). Les entrÃ©es non utilisÃ©es
+      # pendant 7 jours sont purgÃ©es par GitHub : avec un run quotidien,
       # le cache reste toujours vivant.
       # ---------------------------------------------------------
       - name: Restore abuse.ch fallback cache
@@ -116,8 +116,8 @@ jobs:
       # abuse.ch now requires a free Auth-Key (https://auth.abuse.ch).
       # Add it in: Settings > Secrets and variables > Actions > New secret
       # Name: ABUSECH_KEY
-      # Téléchargement : HTTP/1.1 forcé (évite "HTTP/2 stream ... INTERNAL_ERROR"),
-      # 3 tentatives, contrôle de taille minimale, sinon repli sur le cache.
+      # TÃ©lÃ©chargement : HTTP/1.1 forcÃ© (Ã©vite "HTTP/2 stream ... INTERNAL_ERROR"),
+      # 3 tentatives, contrÃ´le de taille minimale, sinon repli sur le cache.
       - name: DATABASE PREPARATION - ThreatFox
         continue-on-error: true
         shell: bash
@@ -172,12 +172,12 @@ jobs:
             echo "::warning::ThreatFox download failed and no cache available - skipping."
           fi
 
-      # MalwareBazaar : le full.csv.zip (~19 Mo) est coupé en cours de route
-      # par le serveur ("unexpected eof"). On passe donc en incrémental :
-      #   - le cache contient l'ensemble cumulé des sha256
-      #   - chaque run ajoute recent.csv (petit, quasi jamais coupé)
-      #   - le full n'est retenté qu'en cas de cache vide ou tous les 7 jours,
-      #     avec reprise du téléchargement (-C -) au lieu de repartir de zéro
+      # MalwareBazaar : le full.csv.zip (~19 Mo) est coupÃ© en cours de route
+      # par le serveur ("unexpected eof"). On passe donc en incrÃ©mental :
+      #   - le cache contient l'ensemble cumulÃ© des sha256
+      #   - chaque run ajoute recent.csv (petit, quasi jamais coupÃ©)
+      #   - le full n'est retentÃ© qu'en cas de cache vide ou tous les 7 jours,
+      #     avec reprise du tÃ©lÃ©chargement (-C -) au lieu de repartir de zÃ©ro
       - name: DATABASE PREPARATION - MalwareBazaar
         continue-on-error: true
         shell: bash
@@ -197,13 +197,13 @@ jobs:
           mkdir -p "$tmpd" "$cdir"
           base="https://mb-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}"
 
-          # Télécharge avec reprise. Réussi = fichier complet (zip valide ou CSV non vide)
-          # Téléchargement par morceaux (Range) : chaque morceau est petit, donc passe
-          # avant la coupure du serveur ; il est refait seul s'il échoue, en parallèle.
+          # TÃ©lÃ©charge avec reprise. RÃ©ussi = fichier complet (zip valide ou CSV non vide)
+          # TÃ©lÃ©chargement par morceaux (Range) : chaque morceau est petit, donc passe
+          # avant la coupure du serveur ; il est refait seul s'il Ã©choue, en parallÃ¨le.
           fetch_chunked() { # $1=fichier distant  $2=destination
             local f="$1" dl="$2" size n i
             export MB_URL="$base/$f" MB_DL="$dl" MB_CHUNK="${MB_CHUNK_BYTES:-16777216}"
-            # 1) taille via une requête Range 0-0 (Content-Range: bytes 0-0/TOTAL), 2) sinon via HEAD
+            # 1) taille via une requÃªte Range 0-0 (Content-Range: bytes 0-0/TOTAL), 2) sinon via HEAD
             size=$(curl -sL --http1.1 --connect-timeout 20 --max-time 60 -r 0-0 -D - -o /dev/null "$MB_URL" 2>/dev/null \
                    | tr -d '\r' | awk 'tolower($1)=="content-range:"{split($3,a,"/"); v=a[2]} END{print v+0}')
             if [ "${size:-0}" -le 1 ]; then
@@ -247,12 +247,12 @@ jobs:
               if [ $rc -eq 0 ]; then
                 case "$f" in *.zip) unzip -tq "$dl" >/dev/null 2>&1 && return 0 ;; *) [ -s "$dl" ] && return 0 ;; esac
               fi
-              # 33 = le serveur ne gère pas Range -> on repart de zéro
+              # 33 = le serveur ne gÃ¨re pas Range -> on repart de zÃ©ro
               if [ $rc -eq 33 ] || [ $rc -eq 22 ]; then rm -f "$dl"; size=0; fi
-              echo "::warning::MalwareBazaar $f tentative $i (curl rc=$rc, $size octets reçus)"
-              # Abandon si le téléchargement n'avance plus (2 tentatives sans progrès)
+              echo "::warning::MalwareBazaar $f tentative $i (curl rc=$rc, $size octets reÃ§us)"
+              # Abandon si le tÃ©lÃ©chargement n'avance plus (2 tentatives sans progrÃ¨s)
               if [ "$size" -le "$last" ]; then stalls=$((stalls + 1)); else stalls=0; fi
-              [ $stalls -ge 2 ] && { echo "::warning::MalwareBazaar $f : aucun progrès, abandon."; return 1; }
+              [ $stalls -ge 2 ] && { echo "::warning::MalwareBazaar $f : aucun progrÃ¨s, abandon."; return 1; }
               last=$size
               sleep 5
             done
@@ -271,7 +271,7 @@ jobs:
 
           age() { [ -s "$1" ] && echo $(( ( $(date +%s) - $(date -d "$(cat "$1")" +%s) ) / 86400 )) || echo 9999; }
           need_full=0
-          if [ "$prev" -lt "$MB_MIN_FULL" ]; then need_full=1   # amorçage : cache vide
+          if [ "$prev" -lt "$MB_MIN_FULL" ]; then need_full=1   # amorÃ§age : cache vide
           elif [ "$(age "$stamp")" -ge "$MB_FULL_EVERY_DAYS" ] && [ "$(age "$tried")" -ge "$MB_FULL_RETRY_DAYS" ]; then need_full=1
           fi
           [ "$need_full" = 1 ] && date -u +%Y-%m-%d > "$tried"
@@ -289,7 +289,7 @@ jobs:
             fi
           fi
 
-          # Fusion cache + nouveautés, avec garde-fou contre un fichier qui rétrécit
+          # Fusion cache + nouveautÃ©s, avec garde-fou contre un fichier qui rÃ©trÃ©cit
           sort -u "$tmpd/cache.txt" "$tmpd/new.txt" > "$out.tmp"
           n=$(wc -l < "$out.tmp")
           if [ "$n" -ge "$prev" ] && [ "$n" -ge "$MB_MIN_FULL" ] && { [ "$got_full" = 1 ] || [ "$got_recent" = 1 ]; }; then
@@ -300,13 +300,13 @@ jobs:
             echo "MalwareBazaar: $n sha256 (+$((n - prev)); full=$got_full recent=$got_recent, cache refreshed)."
           elif [ "$prev" -ge "$MB_MIN_FULL" ]; then
             rm -f "$out.tmp"; cp "$tmpd/cache.txt" "$out"
-            echo "::warning::MalwareBazaar: aucun téléchargement réussi - cache utilisé ($prev sha256)."
+            echo "::warning::MalwareBazaar: aucun tÃ©lÃ©chargement rÃ©ussi - cache utilisÃ© ($prev sha256)."
           else
             rm -f "$out.tmp"
             echo "::warning::MalwareBazaar failed and no usable cache - skipping."
           fi
 
-      # Enregistre le cache uniquement si au moins un téléchargement a réussi
+      # Enregistre le cache uniquement si au moins un tÃ©lÃ©chargement a rÃ©ussi
       - name: Save abuse.ch fallback cache
         if: env.ABUSECH_CACHE_UPDATED == '1'
         uses: actions/cache/save@v6
@@ -326,9 +326,9 @@ jobs:
           done < "${{ github.workspace }}/various/stalkerware.csv";
           sed -i '1d' "${{ github.workspace }}/raw/stalkerware.hsb";
 
-      # rsync sans permissions/propriétaire distants (-a les applique et échoue si le
+      # rsync sans permissions/propriÃ©taire distants (-a les applique et Ã©choue si le
       # miroir envoie des attributs bizarres : "Permission denied (13)", code 23),
-      # 3 essais, et un échec n'arrête plus tout le job.
+      # 3 essais, et un Ã©chec n'arrÃªte plus tout le job.
       - name: DATABASE PREPARATION - Sanesecurity
         continue-on-error: true
         shell: bash
@@ -342,11 +342,11 @@ jobs:
             rc=0
             rsync -rltv --no-perms --no-owner --no-group --chmod=D755,F644 rsync://rsync.sanesecurity.net/sanesecurity . || rc=$?
             if [ $rc -eq 0 ]; then ok=1; break; fi
-            echo "::warning::Sanesecurity rsync tentative $i échouée (code $rc)"
+            echo "::warning::Sanesecurity rsync tentative $i Ã©chouÃ©e (code $rc)"
             chmod -R u+rwX "$d" 2>/dev/null || true
             sleep $((i * 15))
           done
-          # Même en échec partiel, on exploite les fichiers déjà reçus
+          # MÃªme en Ã©chec partiel, on exploite les fichiers dÃ©jÃ  reÃ§us
           for ext in hsb hdb; do
             for f in *."$ext"; do
               echo "" >> "$ws/raw/sanesecurity-$f"
@@ -356,7 +356,7 @@ jobs:
           done
           rm -fv "$ws/raw/sanesecurity-crdfam.clamav.hdb" "$ws/raw/sanesecurity-doppelstern.hdb" "$ws/raw/sanesecurity-malware.expert.hdb"
           [ "$ok" = 1 ] && echo "Sanesecurity: OK ($(ls *.hsb *.hdb 2>/dev/null | wc -l) fichiers hash)." \
-                        || echo "::warning::Sanesecurity: échec rsync, $(ls *.hsb *.hdb 2>/dev/null | wc -l) fichiers hash exploités."
+                        || echo "::warning::Sanesecurity: Ã©chec rsync, $(ls *.hsb *.hdb 2>/dev/null | wc -l) fichiers hash exploitÃ©s."
 
       - name: DATABASE PREPARATION - Avast Covid-19 IOC
         continue-on-error: true
@@ -480,7 +480,7 @@ jobs:
           open(out, "w").write("\n".join(best) + "\n")
           PY
               if [ "$ok" = 1 ]; then
-                # Âge réel du snapshot : en-tête Date: du .mhtml sinon date des fichiers dans le zip
+                # Ãge rÃ©el du snapshot : en-tÃªte Date: du .mhtml sinon date des fichiers dans le zip
                 # (la date du fichier sur le runner = date du checkout, donc inutilisable).
                 read -r snap age < <(python3 - "$cache" <<'PY'
           import sys, zipfile, datetime, email.utils
@@ -501,16 +501,16 @@ jobs:
           print(best.strftime("%Y-%m-%d"), (datetime.datetime.utcnow() - best).days)
           PY
                 )
-                echo "::warning::divested.dev unreachable (${observed}) — using cached divest.zip (snapshot of ${snap:-unknown}, ${age:-?} days old)."
+                echo "::warning::divested.dev unreachable (${observed}) â using cached divest.zip (snapshot of ${snap:-unknown}, ${age:-?} days old)."
                 if [ "${age:-0}" -ge "${DIVEST_MAX_AGE_DAYS:-14}" ]; then
-                  echo "::warning::divest.zip is ${age} days old (limit ${DIVEST_MAX_AGE_DAYS:-14}) — refresh it manually."
+                  echo "::warning::divest.zip is ${age} days old (limit ${DIVEST_MAX_AGE_DAYS:-14}) â refresh it manually."
                 fi
               fi
             fi
           fi
 
           if [ "$ok" != 1 ]; then
-            echo "::warning::All divested.dev endpoints failed and no usable cache — continuing without this source. HTTP results: ${observed}"
+            echo "::warning::All divested.dev endpoints failed and no usable cache â continuing without this source. HTTP results: ${observed}"
             : > "$output"
           fi
           echo "Divest domains file: $(wc -l < "$output") lines."
@@ -985,8 +985,8 @@ jobs:
       # the current malware sha256 database, bloom at 1e-9 fpp.
       # continue-on-error: the app treats this file as optional (404 tolerated).
       # Cache des index F-Droid : les hashes extraits + l'ETag de chaque index sont
-      # gardés ; au run suivant l'index n'est retéléchargé que s'il a changé (304
-      # sinon). L'archive (la plus lourde, quasi figée) n'est re-vérifiée qu'après 30 j.
+      # gardÃ©s ; au run suivant l'index n'est retÃ©lÃ©chargÃ© que s'il a changÃ© (304
+      # sinon). L'archive (la plus lourde, quasi figÃ©e) n'est re-vÃ©rifiÃ©e qu'aprÃ¨s 30 j.
       - name: Restore whitelist index cache
         uses: actions/cache/restore@v6
         with:
@@ -1087,7 +1087,7 @@ jobs:
           date > "${{ github.workspace }}/deploy/generation_time.html"
 
       # ---------------------------------------------------------
-      #  CORRECTION GPG — version stable pour GitHub Actions
+      #  CORRECTION GPG â version stable pour GitHub Actions
       # ---------------------------------------------------------
       - name: Sign databases (if GPG_PRIVATE_KEY secret is set)
         shell: bash
@@ -1135,7 +1135,7 @@ jobs:
             date > "$deploy/sign_time.html"
 
           else
-            echo "::warning::GPG_PRIVATE_KEY secret not set — deploying unsigned."
+            echo "::warning::GPG_PRIVATE_KEY secret not set â deploying unsigned."
             cp "${{ github.workspace }}/gpg.key" "$deploy/" || true
             cp "${{ github.workspace }}"/*.bin.sig "$deploy/" 2>/dev/null || true
           fi
@@ -1176,3 +1176,27 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: "${{ github.workspace }}/deploy"
           # force_orphan must stay false: the unsigned branch also hosts the
+          # extended md5 database deployed by generate_extended.yml
+          force_orphan: false
+          keep_files: true
+          publish_branch: unsigned
+
+      - name: Commit refreshed caches (divest.zip, malshare)
+        if: env.DIVEST_CACHE_UPDATED == '1' || env.MALSHARE_CACHE_UPDATED == '1'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          if [ "$DIVEST_CACHE_UPDATED" = "1" ]; then
+            cp "${{ github.workspace }}/cache-new/divest.zip" "${{ github.workspace }}/divest.zip"
+            git add divest.zip
+          fi
+          if [ "$MALSHARE_CACHE_UPDATED" = "1" ]; then
+            mkdir -p cache
+            cp "${{ github.workspace }}/cache-new/malshare.csv" cache/malshare.csv
+            git add cache/malshare.csv
+          fi
+          git commit -m "Refresh caches [skip ci]" || exit 0
+          git push origin main
