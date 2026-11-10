@@ -45,7 +45,7 @@ jobs:
           rm -rf /tmp/divest-zipref && mkdir -p /tmp/divest-zipref
           unzip -o -q "$cache" -d /tmp/divest-zipref || { echo "::error::unzip failed"; exit 1; }
           # Same extraction as the main workflow (divest.zip holds an .mhtml snapshot)
-python3 - /tmp/divest-zipref "$zipref" <<'PY'
+          python3 - /tmp/divest-zipref "$zipref" <<'PY'
           import sys, os, re, html, email, email.policy
           src, out = sys.argv[1], sys.argv[2]
           domain = re.compile(r"^[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?)+$")
