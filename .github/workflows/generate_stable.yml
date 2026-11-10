@@ -519,7 +519,34 @@ jobs:
             echo "::warning::All divested.dev endpoints failed and no usable cache — continuing without this source. HTTP results: ${observed}"
             : > "$output"
           fi
-          echo "Divest domains file: $(wc -l < "$output") lines."
+          # --- Merge with the list rebuilt from living sources (tools/build_divest_domains.py) ---
+        rebuilt="${{ github.workspace }}/various/divested-rebuilt.txt"
+        report="${{ github.workspace }}/various/divest-extra-domains.txt"
+        cmp_args=()
+        [ -f "$cache" ] && cmp_args=(--compare "$cache")
+        if python3 "${{ github.workspace }}/tools/build_divest_domains.py" \
+             --sources "${{ github.workspace }}/divest-sources.txt" \
+             -o "$rebuilt" "${cmp_args[@]}"; then
+          if [ -s "$rebuilt" ]; then
+            ref="$output"
+            if [ -f "$cache" ]; then
+              rm -rf /tmp/divest-zipref && mkdir -p /tmp/divest-zipref
+              if unzip -o -q "$cache" -d /tmp/divest-zipref && [ -s /tmp/divest-zipref/divested.txt ]; then
+                ref=/tmp/divest-zipref/divested.txt
+              fi
+            fi
+            if [ -s "$ref" ]; then
+              comm -13 <(sort -u "$ref") <(sort -u "$rebuilt") > "$report" || true
+              echo "Domaines en + vs zip/live ($(wc -l < "$report")): various/divest-extra-domains.txt"
+              sort -u "$ref" "$rebuilt" > "$output.tmp" && mv "$output.tmp" "$output"
+              echo "Liste fusionnée (union zip/live + sources vivantes): $(wc -l < "$output") domaines."
+            fi
+          fi
+        else
+          echo "::warning::build_divest_domains.py a echoue - pas de fusion."
+        fi
+
+        echo "Divest domains file: $(wc -l < "$output") lines."
 
       - name: DATABASE PREPARATION - Zimperium IOC
         continue-on-error: true
