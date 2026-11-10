@@ -1000,11 +1000,11 @@ jobs:
         run: |
           ws="${{ github.workspace }}"
           mkdir -p "$ws/raw-whitelist" "$ws/production" "$ws/whitelist-cache"
-          before=$(cat "$ws"/whitelist-cache/* 2>/dev/null | md5sum)
+          before=$(find "$ws/whitelist-cache" -type f -exec cat {} + 2>/dev/null | md5sum)
           python3 "$ws/tools/fdroid_hashes.py" --archive --izzy \
             --cache-dir "$ws/whitelist-cache" --max-age-archive-days 30 \
             > "$ws/raw-whitelist/fdroid.sha256"
-          after=$(cat "$ws"/whitelist-cache/* 2>/dev/null | md5sum)
+          after=$(find "$ws/whitelist-cache" -type f -exec cat {} + 2>/dev/null | md5sum)
           if [ "$before" != "$after" ] && [ -s "$ws/raw-whitelist/fdroid.sha256" ]; then
             echo "WHITELIST_CACHE_UPDATED=1" >> "$GITHUB_ENV"
           fi
@@ -1176,27 +1176,3 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: "${{ github.workspace }}/deploy"
           # force_orphan must stay false: the unsigned branch also hosts the
-          # extended md5 database deployed by generate_extended.yml
-          force_orphan: false
-          keep_files: true
-          publish_branch: unsigned
-
-      - name: Commit refreshed caches (divest.zip, malshare)
-        if: env.DIVEST_CACHE_UPDATED == '1' || env.MALSHARE_CACHE_UPDATED == '1'
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout -B main origin/main
-          if [ "$DIVEST_CACHE_UPDATED" = "1" ]; then
-            cp "${{ github.workspace }}/cache-new/divest.zip" "${{ github.workspace }}/divest.zip"
-            git add divest.zip
-          fi
-          if [ "$MALSHARE_CACHE_UPDATED" = "1" ]; then
-            mkdir -p cache
-            cp "${{ github.workspace }}/cache-new/malshare.csv" cache/malshare.csv
-            git add cache/malshare.csv
-          fi
-          git commit -m "Refresh caches [skip ci]" || exit 0
-          git push origin main
