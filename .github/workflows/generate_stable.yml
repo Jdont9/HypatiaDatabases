@@ -147,6 +147,12 @@ jobs:
                   | grep -oE '\b[a-fA-F0-9]{64}\b' \
                   | tr '[:upper:]' '[:lower:]' | sort -u \
                   > "$out.tmp" || true
+                # Domain/host IOCs too (the export CSV carries them alongside the hashes)
+                cat "$ws"/various/threatfox/*.csv \
+                  | tr '[:upper:]' '[:lower:]' \
+                  | grep -oE '\b([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b' \
+                  | grep -vE '\.(csv|zip|txt|html?|php|asp|aspx|js|css|png|jpe?g|gif|svg|ico|pdf|xml|json)$' \
+                  | sort -u >> "$ws/various/domains-extra.txt" || true
                 n=$(wc -l < "$out.tmp")
                 if [ "$n" -ge "$TF_MIN_LINES" ]; then
                   mv "$out.tmp" "$out"; fresh=1; break
