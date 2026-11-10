@@ -522,9 +522,9 @@ jobs:
           echo "Divest domains file: $(wc -l < "$output") lines."
 
       - name: COMPARE rebuilt Divest list vs divest.zip (report only)
-      continue-on-error: true
-      shell: bash
-      run: |
+        continue-on-error: true
+        shell: bash
+        run: |
         ws="${{ github.workspace }}"
         cache="$ws/divest.zip"
         rebuilt="$ws/various/divested-rebuilt.txt"
