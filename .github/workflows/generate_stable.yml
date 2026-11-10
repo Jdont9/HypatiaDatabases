@@ -525,21 +525,20 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-        ws="${{ github.workspace }}"
-        cache="$ws/divest.zip"
-        rebuilt="$ws/various/divested-rebuilt.txt"
-        cmp_args=()
-        [ -f "$cache" ] && cmp_args=(--compare "$cache")
-        python3 "$ws/tools/build_divest_domains.py" --sources "$ws/divest-sources.txt" -o "$rebuilt" "${cmp_args[@]}" || { echo "::warning::build failed"; exit 0; }
-        [ -s "$rebuilt" ] || { echo "::warning::liste rebuild vide"; exit 0; }
-        if [ -f "$cache" ]; then
-          rm -rf /tmp/divest-zipref && mkdir -p /tmp/divest-zipref
-          if unzip -o -q "$cache" -d /tmp/divest-zipref && [ -s /tmp/divest-zipref/divested.txt ]; then
-            comm -23 <(sort -u /tmp/divest-zipref/divested.txt) <(sort -u "$rebuilt") > "$ws/various/divest-zip-extra.txt" || true
-            echo "Domaines dans divest.zip mais ABSENTS de la liste rebuild: $(wc -l < "$ws/various/divest-zip-extra.txt") -> various/divest-zip-extra.txt"
+          ws="${{ github.workspace }}"
+          cache="$ws/divest.zip"
+          rebuilt="$ws/various/divested-rebuilt.txt"
+          cmp_args=()
+          [ -f "$cache" ] && cmp_args=(--compare "$cache")
+          python3 "$ws/tools/build_divest_domains.py" --sources "$ws/divest-sources.txt" -o "$rebuilt" "${cmp_args[@]}" || { echo "::warning::build failed"; exit 0; }
+          [ -s "$rebuilt" ] || { echo "::warning::liste rebuild vide"; exit 0; }
+          if [ -f "$cache" ]; then
+            rm -rf /tmp/divest-zipref && mkdir -p /tmp/divest-zipref
+            if unzip -o -q "$cache" -d /tmp/divest-zipref && [ -s /tmp/divest-zipref/divested.txt ]; then
+              comm -23 <(sort -u /tmp/divest-zipref/divested.txt) <(sort -u "$rebuilt") > "$ws/various/divest-zip-extra.txt" || true
+              echo "Domaines dans divest.zip mais ABSENTS de la liste rebuild: $(wc -l < "$ws/various/divest-zip-extra.txt") -> various/divest-zip-extra.txt"
+            fi
           fi
-        fi
-
       - name: DATABASE PREPARATION - Zimperium IOC
         continue-on-error: true
         run: |
