@@ -540,7 +540,7 @@ jobs:
           fi
         fi
 
-    - name: DATABASE PREPARATION - Zimperium IOC
+      - name: DATABASE PREPARATION - Zimperium IOC
         continue-on-error: true
         run: |
           git clone --depth 1 https://github.com/Zimperium/IOC.git "${{ github.workspace }}/various/zimperium/"
