@@ -44,9 +44,41 @@ jobs:
           fi
           rm -rf /tmp/divest-zipref && mkdir -p /tmp/divest-zipref
           unzip -o -q "$cache" -d /tmp/divest-zipref || { echo "::error::unzip failed"; exit 1; }
-          find /tmp/divest-zipref -type f \( -name '*.txt' -o -name '*.html' -o -name '*.mhtml' \) -exec cat {} + \
-            | grep -E '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' \
-            | tr '[:upper:]' '[:lower:]' | sort -u > "$zipref" || true
+          # Same extraction as the main workflow (divest.zip holds an .mhtml snapshot)
+python3 - /tmp/divest-zipref "$zipref" <<'PY'
+          import sys, os, re, html, email, email.policy
+          src, out = sys.argv[1], sys.argv[2]
+          domain = re.compile(r"^[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?)+$")
+          best = []
+          for root, _, files in os.walk(src):
+              for name in files:
+                  raw = open(os.path.join(root, name), "rb").read()
+                  text = None
+                  if name.lower().endswith((".mhtml", ".mht")) or raw[:5] == b"From:":
+                      msg = email.message_from_bytes(raw, policy=email.policy.default)
+                      for part in msg.walk():
+                          if part.get_content_type() == "text/html":
+                              text = part.get_content()
+                              break
+                      if text is not None:
+                          m = re.search(r"<pre[^>]*>(.*?)</pre>", text, re.S | re.I)
+                          text = html.unescape(m.group(1) if m else re.sub(r"<[^>]+>", "", text))
+                  else:
+                      text = raw.decode("utf-8", "ignore")
+                  if not text:
+                      continue
+                  lines = set()
+                  for l in text.splitlines():
+                      l = l.strip().lower()
+                      if l and not l.startswith("#") and not l.startswith("*.") and domain.match(l):
+                          lines.add(l)
+                  if len(lines) > len(best):
+                      best = sorted(lines)
+          if not best:
+              sys.exit(1)
+          open(out, "w").write("\n".join(best) + "\n")
+          PY
+          [ -s "$zipref" ] || { echo "::error::0 domaines extraits du zip"; exit 1; }
           sort -u "$rebuilt" > "$ws/reports/divested-rebuilt-sorted.txt"
           comm -23 "$zipref" "$ws/reports/divested-rebuilt-sorted.txt" > "$ws/reports/zip-only-domains.txt" || true
           comm -13 "$zipref" "$ws/reports/divested-rebuilt-sorted.txt" > "$ws/reports/sources-only-domains.txt" || true
