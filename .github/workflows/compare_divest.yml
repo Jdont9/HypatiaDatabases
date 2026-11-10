@@ -43,10 +43,10 @@ jobs:
             exit 0
           fi
           rm -rf /tmp/divest-zipref && mkdir -p /tmp/divest-zipref
-          unzip -o -q "$cache" -d /tmp/divest-zipref
+          unzip -o -q "$cache" -d /tmp/divest-zipref || { echo "::error::unzip failed"; exit 1; }
           find /tmp/divest-zipref -type f \( -name '*.txt' -o -name '*.html' -o -name '*.mhtml' \) -exec cat {} + \
             | grep -E '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$' \
-            | tr '[:upper:]' '[:lower:]' | sort -u > "$zipref"
+            | tr '[:upper:]' '[:lower:]' | sort -u > "$zipref" || true
           sort -u "$rebuilt" > "$ws/reports/divested-rebuilt-sorted.txt"
           comm -23 "$zipref" "$ws/reports/divested-rebuilt-sorted.txt" > "$ws/reports/zip-only-domains.txt" || true
           comm -13 "$zipref" "$ws/reports/divested-rebuilt-sorted.txt" > "$ws/reports/sources-only-domains.txt" || true
