@@ -404,141 +404,37 @@ jobs:
           sed -i '1d' ${{ github.workspace }}/raw/targetedthreats.hdb;
           sed -i '1d' ${{ github.workspace }}/raw/targetedthreats.hsb;
 
-      - name: DATABASE PREPARATION - Divest Domains (best effort, cache fallback)
+      # Divest domains = lists rebuilt from the living sources (divest-sources.txt)
+      # + divest-zip-only.txt: the domains that only the old divest.zip snapshot had
+      # and that no other source of this workflow covers (see compare_divest.yml,
+      # reports/coverage/missing.txt). divested.dev is no longer downloaded.
+      - name: DATABASE PREPARATION - Divest Domains (rebuilt sources + zip-only snapshot)
         shell: bash
         continue-on-error: true
         env:
-          DIVEST_MAX_AGE_DAYS: "14"
-        run: |
-          output="${{ github.workspace }}/domains/divested.txt"
-          cache="${{ github.workspace }}/divest.zip"
-          UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
-          headers=(-H "User-Agent: $UA"
-                   -H "Accept: text/plain,text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"
-                   -H "Accept-Language: en-US,en;q=0.5"
-                   -H "Accept-Encoding: identity")
-          observed=""
-
-          try_fetch() {
-            local url="$1" dest="$2" code
-            code=$(curl -sS -L -o "$dest" -w "%{http_code}" --max-time 120 \
-              --retry 2 --retry-all-errors "${headers[@]}" "$url" 2>&1) || true
-            observed="${observed}[${url} => ${code}] "
-            [ -s "$dest" ] || return 1
-            head -c 200 "$dest" | grep -qi "<!DOCTYPE\|<html" && return 1
-            return 0
-          }
-
-          ok=0
-          if try_fetch "https://divested.dev/hosts-domains" "$output"; then
-            ok=1; echo "Downloaded fresh Divest domains list."
-            # Fresh download succeeded: also refresh the divest.zip cache
-            # in the repo so the fallback stays current.
-            rm -rf /tmp/divest-refresh && mkdir -p /tmp/divest-refresh
-            cp "$output" /tmp/divest-refresh/divested.txt
-            (cd /tmp/divest-refresh && zip -q -r divest.zip divested.txt)
-            mkdir -p "${{ github.workspace }}/cache-new"
-            cp /tmp/divest-refresh/divest.zip "${{ github.workspace }}/cache-new/divest.zip"
-            echo "DIVEST_CACHE_UPDATED=1" >> "$GITHUB_ENV"
-          elif try_fetch "https://divested.dev/hosts-domains-wildcards" /tmp/divest-wc.txt; then
-            grep -Ev "^[[:space:]]*(#|$|\*\.)" /tmp/divest-wc.txt > "$output" || true
-            if [ -s "$output" ]; then ok=1; echo "::warning::Primary endpoint failed; used wildcards list."; fi
-          elif try_fetch "https://divested.dev/hosts" /tmp/divest-hosts.txt; then
-            awk '($1=="0.0.0.0" || $1=="127.0.0.1") && $2 !~ /^#/ {print $2}' /tmp/divest-hosts.txt | sort -u > "$output" || true
-            if [ -s "$output" ]; then ok=1; echo "::warning::Domain endpoints failed; extracted domains from hosts list."; fi
-          fi
-
-          if [ "$ok" != 1 ] && [ -f "$cache" ]; then
-            rm -rf /tmp/divest-cache && mkdir -p /tmp/divest-cache
-            if unzip -o -q "$cache" -d /tmp/divest-cache; then
-              # divest.zip contains a browser snapshot (.mhtml): decode MIME, extract the <pre> block
-              python3 - /tmp/divest-cache "$output" <<'PY' && ok=1
-          import sys, os, re, html, email, email.policy
-          src, out = sys.argv[1], sys.argv[2]
-          domain = re.compile(r"^[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?)+$")
-          best = []
-          for root, _, files in os.walk(src):
-              for name in files:
-                  raw = open(os.path.join(root, name), "rb").read()
-                  text = None
-                  if name.lower().endswith((".mhtml", ".mht")) or raw[:5] == b"From:":
-                      msg = email.message_from_bytes(raw, policy=email.policy.default)
-                      for part in msg.walk():
-                          if part.get_content_type() == "text/html":
-                              text = part.get_content()
-                              break
-                      if text is not None:
-                          m = re.search(r"<pre[^>]*>(.*?)</pre>", text, re.S | re.I)
-                          text = html.unescape(m.group(1) if m else re.sub(r"<[^>]+>", "", text))
-                  else:
-                      text = raw.decode("utf-8", "ignore")
-                  if not text:
-                      continue
-                  lines = set()
-                  for l in text.splitlines():
-                      l = l.strip().lower()
-                      if l and not l.startswith("#") and not l.startswith("*.") and domain.match(l):
-                          lines.add(l)
-                  if len(lines) > len(best):
-                      best = sorted(lines)
-          if not best:
-              sys.exit(1)
-          open(out, "w").write("\n".join(best) + "\n")
-          PY
-              if [ "$ok" = 1 ]; then
-                # Âge réel du snapshot : en-tête Date: du .mhtml sinon date des fichiers dans le zip
-                # (la date du fichier sur le runner = date du checkout, donc inutilisable).
-                read -r snap age < <(python3 - "$cache" <<'PY'
-          import sys, zipfile, datetime, email.utils
-          z = zipfile.ZipFile(sys.argv[1])
-          best = None
-          for info in z.infolist():
-              d = datetime.datetime(*info.date_time)
-              if info.filename.lower().endswith((".mhtml", ".mht")):
-                  head = z.read(info.filename)[:4096].decode("utf-8", "ignore")
-                  for line in head.splitlines():
-                      if line.lower().startswith("date:"):
-                          try:
-                              d = email.utils.parsedate_to_datetime(line[5:].strip()).replace(tzinfo=None)
-                          except Exception:
-                              pass
-                          break
-              best = d if best is None or d > best else best
-          print(best.strftime("%Y-%m-%d"), (datetime.datetime.utcnow() - best).days)
-          PY
-                )
-                echo "::warning::divested.dev unreachable (${observed}) — using cached divest.zip (snapshot of ${snap:-unknown}, ${age:-?} days old)."
-                if [ "${age:-0}" -ge "${DIVEST_MAX_AGE_DAYS:-14}" ]; then
-                  echo "::warning::divest.zip is ${age} days old (limit ${DIVEST_MAX_AGE_DAYS:-14}) — refresh it manually."
-                fi
-              fi
-            fi
-          fi
-
-          if [ "$ok" != 1 ]; then
-            echo "::warning::All divested.dev endpoints failed and no usable cache — continuing without this source. HTTP results: ${observed}"
-            : > "$output"
-          fi
-          echo "Divest domains file: $(wc -l < "$output") lines."
-
-      - name: COMPARE rebuilt Divest list vs divest.zip (report only)
-        continue-on-error: true
-        shell: bash
+          DIVEST_MIN_REBUILT: "1000000"
         run: |
           ws="${{ github.workspace }}"
-          cache="$ws/divest.zip"
+          output="$ws/domains/divested.txt"
           rebuilt="$ws/various/divested-rebuilt.txt"
-          cmp_args=()
-          [ -f "$cache" ] && cmp_args=(--compare "$cache")
-          python3 "$ws/tools/build_divest_domains.py" --sources "$ws/divest-sources.txt" -o "$rebuilt" "${cmp_args[@]}" || { echo "::warning::build failed"; exit 0; }
-          [ -s "$rebuilt" ] || { echo "::warning::liste rebuild vide"; exit 0; }
-          if [ -f "$cache" ]; then
-            rm -rf /tmp/divest-zipref && mkdir -p /tmp/divest-zipref
-            if unzip -o -q "$cache" -d /tmp/divest-zipref && [ -s /tmp/divest-zipref/divested.txt ]; then
-              comm -23 <(sort -u /tmp/divest-zipref/divested.txt) <(sort -u "$rebuilt") > "$ws/various/divest-zip-extra.txt" || true
-              echo "Domaines dans divest.zip mais ABSENTS de la liste rebuild: $(wc -l < "$ws/various/divest-zip-extra.txt") -> various/divest-zip-extra.txt"
-            fi
+          extra="$ws/divest-zip-only.txt"
+          mkdir -p "$ws/domains" "$ws/various"
+          : > "$rebuilt"
+          python3 "$ws/tools/build_divest_domains.py" --sources "$ws/divest-sources.txt" -o "$rebuilt" \
+            || echo "::warning::build_divest_domains.py failed - the rebuilt list may be missing or partial."
+          n=$(grep -c . "$rebuilt" || true)
+          echo "Rebuilt Divest list: $n domains."
+          if [ "${n:-0}" -lt "${DIVEST_MIN_REBUILT:-1000000}" ]; then
+            echo "::warning::Rebuilt Divest list has only $n domains (expected >= ${DIVEST_MIN_REBUILT}): some sources are probably unreachable. Check the 'Dead/empty sources' list above."
           fi
+          if [ -s "$extra" ]; then
+            echo "Zip-only snapshot: $(grep -c . "$extra") domains."
+          else
+            echo "::warning::divest-zip-only.txt is missing or empty."
+          fi
+          cat "$rebuilt" "$extra" 2>/dev/null | tr -d '\r' | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u > "$output" || true
+          echo "Divest domains file: $(wc -l < "$output") lines."
+
       - name: DATABASE PREPARATION - Zimperium IOC
         continue-on-error: true
         run: |
@@ -1205,18 +1101,14 @@ jobs:
           keep_files: true
           publish_branch: unsigned
 
-      - name: Commit refreshed caches (divest.zip, malshare)
-        if: env.DIVEST_CACHE_UPDATED == '1' || env.MALSHARE_CACHE_UPDATED == '1'
+      - name: Commit refreshed caches (malshare)
+        if: env.MALSHARE_CACHE_UPDATED == '1'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git checkout -B main origin/main
-          if [ "$DIVEST_CACHE_UPDATED" = "1" ]; then
-            cp "${{ github.workspace }}/cache-new/divest.zip" "${{ github.workspace }}/divest.zip"
-            git add divest.zip
-          fi
           if [ "$MALSHARE_CACHE_UPDATED" = "1" ]; then
             mkdir -p cache
             cp "${{ github.workspace }}/cache-new/malshare.csv" cache/malshare.csv
