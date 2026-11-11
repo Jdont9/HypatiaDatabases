@@ -101,6 +101,62 @@ jobs:
           echo "zip=$nzip rebuilt=$nreb zip_only=$nonly sources_only=$snonly"
           echo "Rapport: reports/divest-comparison-report.md"
 
+      # Are the zip-only domains already covered by the other domain sources of the
+      # main workflow (HaGeZi, Phishing.Database, OpenPhish, phishunt, MVT, Avast,
+      # Infosec, Citizen Lab, ThreatFox, URLhaus)? One file per source so the report
+      # can name which source covers what. Keep tools/fetch_extra_domains.py in sync
+      # with generate_stable.yml.
+      - name: Fetch the other domain sources (one file per source)
+        if: hashFiles('reports/zip-only-domains.txt') != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
+        run: |
+          ws="${{ github.workspace }}"
+          [ -s "$ws/reports/zip-only-domains.txt" ] || { echo "Aucun domaine zip-only: rien a verifier."; exit 0; }
+          python3 "$ws/tools/fetch_extra_domains.py" "$ws/reports/extra-sources"
+
+      - name: Build allowlist (same as the main workflow)
+        if: hashFiles('reports/zip-only-domains.txt') != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          TRANCO_TOP: "10000"
+        run: |
+          ws="${{ github.workspace }}"
+          allow="$ws/reports/allowlist.txt"
+          : > "$allow"
+          if curl -fsSL -L --retry 2 --max-time 180 "https://tranco-list.eu/top-1m.csv.zip" -o /tmp/tranco.zip \
+             && unzip -p /tmp/tranco.zip top-1m.csv > /tmp/tranco.csv; then
+            head -n "$TRANCO_TOP" /tmp/tranco.csv | cut -d, -f2 | tr -d '\r' >> "$allow"
+          else
+            echo "::warning::Tranco download failed."
+          fi
+          git clone --depth 1 https://github.com/MISP/misp-warninglists.git /tmp/misp-warninglists || true
+          for l in tranco10k moz-top500 common-ioc-false-positive microsoft google apple; do
+            f="/tmp/misp-warninglists/lists/$l/list.json"
+            if [ -f "$f" ]; then jq -r '.list[]? | strings' "$f" >> "$allow" || true; else echo "MISP list '$l' not found, skipped."; fi
+          done
+          echo "Allowlist: $(wc -l < "$allow") lines."
+
+      - name: Coverage of zip-only domains by the other sources
+        if: hashFiles('reports/zip-only-domains.txt') != ''
+        shell: bash
+        run: |
+          ws="${{ github.workspace }}"
+          [ -s "$ws/reports/zip-only-domains.txt" ] || exit 0
+          [ -d "$ws/reports/extra-sources" ] || { echo "::error::aucune source extra recuperee"; exit 1; }
+          python3 "$ws/tools/zip_only_coverage.py" \
+            --zip-only "$ws/reports/zip-only-domains.txt" \
+            --extras-dir "$ws/reports/extra-sources" \
+            --allowlist "$ws/reports/allowlist.txt" \
+            --out-dir "$ws/reports/coverage"
+          cat "$ws/reports/coverage/coverage-report.md" >> "$GITHUB_STEP_SUMMARY"
+          # Same report file as before, with the coverage summary in front of the long list
+          { cat "$ws/reports/coverage/coverage-report.md"; echo; cat "$ws/reports/divest-comparison-report.md"; } \
+            > "$ws/reports/divest-comparison-report.full.md"
+
       - name: Upload comparison artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,5 +164,7 @@ jobs:
           name: divest-comparison
           path: |
             ${{ github.workspace }}/reports/
+            !${{ github.workspace }}/reports/extra-sources/
+            !${{ github.workspace }}/reports/allowlist.txt
           retention-days: 30
           if-no-files-found: ignore
