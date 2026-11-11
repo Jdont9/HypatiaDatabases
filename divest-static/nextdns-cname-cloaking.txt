@@ -1,0 +1,94 @@
+# Title: NextDNS CNAME Cloaking Blocklist
+#
+# https://github.com/nextdns/cname-cloaking-blocklist
+#
+# Static copy of the last version found on web.archive.org (upstream source is gone).
+#
+# Important: For this blocklist to work, the blocking logic must wildcard match
+# (domain and all its multi-level subdomains) CNAMEs against the domains in this list.
+
+# Eulerian
+eulerian.net
+
+# AT Internet (formerly XiTi)
+at-o.net
+
+# Keyade
+k.keyade.com
+k.madmetrics.com
+
+# Adobe Experience Cloud (formerly Omniture)
+2o7.net
+data.adobedc.net
+sc.adobedc.net
+sc.omtrdc.net
+
+# Criteo
+dnsdelegation.io
+storetail.io
+
+# Commanders Act
+tagcommander.com
+
+# Wizaly
+wizaly.com
+
+# TraceDock
+a351fec2c318c11ea9b9b0a0ae18fb0b-1529426863.eu-central-1.elb.amazonaws.com
+a5e652663674a11e997c60ac8a4ec150-1684524385.eu-central-1.elb.amazonaws.com
+a88045584548111e997c60ac8a4ec150-1610510072.eu-central-1.elb.amazonaws.com
+afc4d9aa2a91d11e997c60ac8a4ec150-2082092489.eu-central-1.elb.amazonaws.com
+
+# Ingenious Technologies
+affex.org
+
+# Webtrekk
+webtrekk.net
+wt-eu02.net
+
+# Otto Group
+oghub.io
+
+# NP6 by ChapsVision
+tracking.bp01.net
+
+# A8.net
+trck.a8.net
+
+# actionlink
+mm.actionlink.jp
+
+# AD EBiS
+cname.ebis.ne.jp
+
+# AdSpyglass
+0i0i0i0.com
+
+# Act-On
+actonservice.com
+actonsoftware.com
+
+# Branch
+thirdparty.bnc.lt
+
+# DataUnlocker
+ddns.dataunlocker.com
+
+# Fathom
+starman.fathomdns.com
+
+# adcloud
+ad-cloud.jp
+
+# Oracle Eloqua
+hs.eloqua.com
+
+# Plausible Analytics
+custom.plausible.io
+
+# Pardot
+go.pardot.com
+
+# Lead Forensics
+# Note: not directly disguising itself as first-party, but cloaking the destination behind plenty of random domains.
+ghochv3eng.trafficmanager.net

@@ -407,7 +407,8 @@ jobs:
       # Divest domains = lists rebuilt from the living sources (divest-sources.txt)
       # + divest-zip-only.txt: the domains that only the old divest.zip snapshot had
       # and that no other source of this workflow covers (see compare_divest.yml,
-      # reports/coverage/missing.txt). divested.dev is no longer downloaded.
+      # reports/coverage/missing.txt) + divest-static/*.txt (lists whose upstream is gone).
+      # divested.dev is no longer downloaded.
       - name: DATABASE PREPARATION - Divest Domains (rebuilt sources + zip-only snapshot)
         shell: bash
         continue-on-error: true
@@ -432,7 +433,11 @@ jobs:
           else
             echo "::warning::divest-zip-only.txt is missing or empty."
           fi
-          cat "$rebuilt" "$extra" 2>/dev/null | tr -d '\r' | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u > "$output" || true
+          # divest-static/*.txt: hand-kept copies of lists whose upstream is gone (comments allowed)
+          static=("$ws"/divest-static/*.txt)
+          [ -e "${static[0]}" ] && echo "Static lists: ${static[*]##*/}"
+          cat "$rebuilt" "$extra" "${static[@]}" 2>/dev/null | tr -d '\r' \
+            | grep -Ev '^[[:space:]]*(#|$)' | LC_ALL=C sort -u > "$output" || true
           echo "Divest domains file: $(wc -l < "$output") lines."
 
       - name: DATABASE PREPARATION - Zimperium IOC

@@ -31,7 +31,7 @@ https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt
 https://raw.githubusercontent.com/infinitytec/blocklists/master/ads-and-trackers.txt
 https://raw.githubusercontent.com/infinitytec/blocklists/master/scams-and-phishing.txt
 https://raw.githubusercontent.com/mitchellkrogza/Badd-Boyz-Hosts/master/domains
-https://raw.githubusercontent.com/nextdns/cname-cloaking-blocklist/master/domains
+# (upstream gone) static copy in divest-static/nextdns-cname-cloaking.txt: https://raw.githubusercontent.com/nextdns/cname-cloaking-blocklist/master/domains
 https://raw.githubusercontent.com/paulgb/BarbBlock/master/blacklists/domain-list.txt
 https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/AmazonFireTV.txt
 https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/android-tracking.txt
