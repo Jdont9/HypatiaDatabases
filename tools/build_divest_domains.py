@@ -37,12 +37,14 @@ def normalize_line(line):
     m = ADBLOCK.match(line)
     if m:
         d = m.group(1)
-    elif re.match(r"^(\d{1,3}\.){3}\d{1,3}[\s|]", line) or "\t" in line or " " in line:
-        # hosts format: "0.0.0.0 domain" / "127.0.0.1<TAB>domain"
+    elif "\t" in line or " " in line:
+        # hosts format "0.0.0.0 domain" / "127.0.0.1<TAB>domain",
+        # or annotated plain list "domain #comment"
         parts = line.split()
-        d = parts[1] if len(parts) >= 2 and IP.match(parts[0]) else None
-        if d is None:
-            return None
+        if IP.match(parts[0]) and len(parts) >= 2:
+            d = parts[1]
+        else:
+            d = parts[0]
     else:
         d = line
     d = d.lower().strip().lstrip("*.").rstrip(".")
