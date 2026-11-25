@@ -133,6 +133,17 @@ jobs:
           cp "${{ github.workspace }}/raw-extended/hypatia-md5-bloom.bin" "${{ github.workspace }}/deploy/hypatia-md5-extended-bloom.bin"
           cp "${{ github.workspace }}/various/generation_report_extended.txt" "${{ github.workspace }}/deploy"
 
+      # Anti-rollback manifest of the extended database (its own sequence number:
+      # this workflow runs independently of generate_stable.yml, and both deploy
+      # to the same branch, so the two manifests must have different names).
+      - name: Build anti-rollback manifest (extended)
+        shell: bash
+        run: |
+          deploy="${{ github.workspace }}/deploy"
+          python3 "${{ github.workspace }}/tools/build_manifest.py" "$deploy" \
+            > "$deploy/hypatia-extended-manifest.txt"
+          cat "$deploy/hypatia-extended-manifest.txt"
+
       - name: Sign extended database
         shell: bash
         env:
@@ -146,13 +157,15 @@ jobs:
             echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
             echo "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
             keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
-            f="$deploy/hypatia-md5-extended-bloom.bin"
             # .sig MUST be binary (no --armor): Hypatia's PGPObjectFactory
             # cannot decode armored signatures.
-            gpg --batch --yes --pinentry-mode loopback \
-                --passphrase "$GPG_PASSPHRASE" \
-                --detach-sign --local-user "$keyid" \
-                --output "$f.sig" "$f"
+            for f in "$deploy/hypatia-md5-extended-bloom.bin" "$deploy/hypatia-extended-manifest.txt"; do
+              gpg --batch --yes --pinentry-mode loopback \
+                  --passphrase "$GPG_PASSPHRASE" \
+                  --detach-sign --local-user "$keyid" \
+                  --output "$f.sig" "$f"
+              gpg --batch --yes --verify "$f.sig" "$f" || { echo "::error::GPG verification failed for $f"; exit 1; }
+            done
             echo "Signed extended database with key $keyid"
           else
             echo "::error::GPG_PRIVATE_KEY secret not set — cannot deploy a valid extended database."

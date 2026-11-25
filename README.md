@@ -28,6 +28,9 @@ This repo has several branches. The `main` branch contains the [code](.github/wo
 Extra domain sources (HaGeZi, Phishing.Database, URLhaus, MVT, Avast, Infosec, Citizen Lab) are filtered against an allowlist (Tranco top 10k + MISP warninglists) before being merged. The Divest list is not filtered.
 ## Generation
 The databases are generated on GitHub's and Codeberg's CI. We utilize a fork of Divest Mobile's [database generator](./src/main/java/org/maintainteam/hypatiadatabases/App.java) to sort the database files, aggregate the hashes, and then create Bloom Filters from them. Then, GitHub/Codeberg Pages are used to publish the files online.
+## Anti-rollback manifest
+Every database file is signed on its own, so an attacker could replay an old set of files that still carry valid signatures. To prevent it, each generation also publishes a signed manifest (`tools/build_manifest.py`): `hypatia-manifest.txt` (+ `.sig`) for the stable databases and `hypatia-extended-manifest.txt` (+ `.sig`) for the extended one. It holds a `sequence` number (UTC epoch seconds of the generation) and the SHA-256 of every database file. The app refuses a manifest older than the last one it accepted and any database file that does not match the manifest. Both manifests are signed by the same step as the databases (binary `.sig`, same key). Servers that do not publish a manifest keep working, but once a server has published one the app no longer accepts its absence.
+
 ## Contribution
 **Development work is done on GitHub, Codeberg is only a mirror.**
 

@@ -1018,6 +1018,21 @@ jobs:
           date > "${{ github.workspace }}/deploy/generation_time.html"
 
       # ---------------------------------------------------------
+      # ANTI-ROLLBACK: signed manifest listing a monotonic sequence number and the
+      # SHA-256 of every database file. The app refuses a manifest older than the
+      # last one it saw, and refuses a database file that does not match the manifest,
+      # so an attacker cannot replay an old (but validly signed) database.
+      # Format: "key=value" lines, ASCII, LF. Signed below by the hypatia-* loop.
+      # ---------------------------------------------------------
+      - name: Build anti-rollback manifest
+        shell: bash
+        run: |
+          deploy="${{ github.workspace }}/deploy"
+          python3 "${{ github.workspace }}/tools/build_manifest.py" "$deploy" \
+            > "$deploy/hypatia-manifest.txt"
+          cat "$deploy/hypatia-manifest.txt"
+
+      # ---------------------------------------------------------
       #  CORRECTION GPG — version stable pour GitHub Actions
       # ---------------------------------------------------------
       - name: Sign databases (if GPG_PRIVATE_KEY secret is set)
@@ -1038,7 +1053,7 @@ jobs:
 
             keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
 
-            for f in "$deploy"/hypatia-*-bloom.bin; do
+            for f in "$deploy"/hypatia-*-bloom.bin "$deploy/hypatia-manifest.txt"; do
               # NB: .sig MUST be binary (no --armor): Hypatia parses it
               # with PGPObjectFactory, which cannot decode armored input.
               gpg --batch --yes --pinentry-mode loopback \
@@ -1051,7 +1066,7 @@ jobs:
             gpg --batch --armor --export "$keyid" > "$deploy/gpg.key"
 
             # Self-check: every .sig must verify against its .bin before deploy
-            for f in "$deploy"/hypatia-*-bloom.bin; do
+            for f in "$deploy"/hypatia-*-bloom.bin "$deploy/hypatia-manifest.txt"; do
               gpg --batch --yes --verify "$f.sig" "$f" || { echo "::error::GPG verification failed for $f"; exit 1; }
             done
             echo "Self-check passed: all signatures verify."
