@@ -1,0 +1,9 @@
+# Hypatia database manifest. Signed with the databases key.
+version=1
+sequence=1795684194
+hypatia-domains-bloom.bin=2952200adcf643529ae1108bbcf279f012b74e9a8bf0f0ab111b3e2b7ba08f11
+hypatia-md5-bloom.bin=5ead20be795bdd8aff746e257a8bda81cf64d1a07147b578c50a93336a3dd2ed
+hypatia-sha1-bloom.bin=b9d5f9abf313a12eca9169e539c5747482fb25d0e1770f7faec9a23469a7c1f2
+hypatia-sha256-bloom.bin=f718c186962ebb3c3bcbbc59b61974633c0e24fd00330cb1ae5a85029cffdf8b
+hypatia-stalkerware-bloom.bin=e3e2761ea14e097b797784eae363621c6332f6a3444ce8ee62cc1c1df3346f52
+hypatia-whitelist-sha256-bloom.bin=8c1736b96a28e8c454687ad69338f382170e8bf3734a72225c292853f20340a7
