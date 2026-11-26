@@ -1,11 +1,12 @@
-# Propose chaque mois des mises à jour des dépendances Gradle et des actions GitHub (chaque proposition est compilée
-# et testée par le workflow avant d'être fusionnée).
+# Propose chaque mois des mises à jour des dépendances Maven (pom.xml) et des actions GitHub (chaque proposition
+# est compilée et testée par le workflow avant d'être fusionnée). Les mises à jour de sécurité (alertes Dependabot)
+# ne suivent pas ce calendrier : elles sont proposées dès qu'une alerte apparaît, mais seulement pour les
+# écosystèmes déclarés ici. Ce dépôt est un projet Maven : sans l'entrée "maven", Dependabot ne peut pas
+# créer la pull request de sécurité.
 version: 2
 updates:
-  - package-ecosystem: "gradle"
-    directories:
-      - "/"
-      - "/app"
+  - package-ecosystem: "maven"
+    directory: "/"
     schedule:
       interval: "monthly"
   - package-ecosystem: "github-actions"

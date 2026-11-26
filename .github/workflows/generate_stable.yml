@@ -124,12 +124,17 @@ jobs:
       # Name: ABUSECH_KEY
       # Téléchargement : HTTP/1.1 forcé (évite "HTTP/2 stream ... INTERNAL_ERROR"),
       # 3 tentatives, contrôle de taille minimale, sinon repli sur le cache.
+      # Borné : chaque essai dure au plus 4 min, l'étape au plus 10 min (budget interne) et 15 min (filet de
+      # sécurité). Un HTTP 429 (limite de débit) arrête les essais : insister prolonge le blocage. Dans tous les
+      # cas on retombe sur le cache, chargé dès le début.
       - name: DATABASE PREPARATION - ThreatFox
         continue-on-error: true
+        timeout-minutes: 15
         shell: bash
         env:
           ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
           TF_MIN_LINES: "1000"
+          TF_BUDGET_SECONDS: "600"
         run: |
           ws="${{ github.workspace }}"
           cdir="$ws/abusech-cache"
@@ -138,14 +143,27 @@ jobs:
           dl="$ws/various/download_threatfox.zip"
           mkdir -p "$ws/various/threatfox" "$cdir"
           fresh=0
+          # Copie de secours chargée d'avance : si l'étape est interrompue, elle reste en place
+          if [ -s "$cfile" ]; then gunzip -c "$cfile" > "$out"; fi
 
           if [ -z "$ABUSECH_KEY" ]; then
             echo "::warning::ABUSECH_KEY secret not set - cannot download ThreatFox."
           else
+            deadline=$((SECONDS + TF_BUDGET_SECONDS))
             for attempt in 1 2 3; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::warning::ThreatFox: time budget used up - using the cache."
+                break
+              fi
               rm -f "$dl"; rm -rf "$ws/various/threatfox"/*
-              if curl -fsSL --http1.1 --retry 3 --retry-delay 10 --retry-all-errors --max-time 600 \
-                   "https://threatfox-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}/full.csv.zip" -o "$dl" \
+              code=$(curl -sSL --http1.1 --connect-timeout 20 --max-time 240 \
+                   "https://threatfox-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}/full.csv.zip" \
+                   -o "$dl" -w '%{http_code}') || code="000"
+              if [ "$code" = "429" ]; then
+                echo "::warning::ThreatFox: HTTP 429 (rate limited) - not retrying, using the cache."
+                break
+              fi
+              if [ "$code" = "200" ] \
                  && unzip -tq "$dl" >/dev/null 2>&1 \
                  && unzip -o -q "$dl" -d "$ws/various/threatfox/"; then
                 cat "$ws"/various/threatfox/*.csv \
@@ -165,10 +183,10 @@ jobs:
                 fi
                 echo "::warning::ThreatFox attempt $attempt: only $n hashes (expected >= $TF_MIN_LINES)."
               else
-                echo "::warning::ThreatFox download attempt $attempt failed."
+                echo "::warning::ThreatFox download attempt $attempt failed (HTTP $code)."
               fi
               rm -f "$out.tmp"
-              sleep $((attempt * 20))
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 30)); fi
             done
           fi
 
@@ -192,6 +210,7 @@ jobs:
       #     avec reprise du téléchargement (-C -) au lieu de repartir de zéro
       - name: DATABASE PREPARATION - MalwareBazaar
         continue-on-error: true
+        timeout-minutes: 30
         shell: bash
         env:
           ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
@@ -208,6 +227,8 @@ jobs:
           tmpd="$ws/various/bazaar"
           mkdir -p "$tmpd" "$cdir"
           base="https://mb-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}"
+          # Copie de secours chargée d'avance : si l'étape est interrompue (délai), elle reste en place
+          if [ -s "$cfile" ]; then gunzip -c "$cfile" > "$out"; fi
 
           # Télécharge avec reprise. Réussi = fichier complet (zip valide ou CSV non vide)
           # Téléchargement par morceaux (Range) : chaque morceau est petit, donc passe
