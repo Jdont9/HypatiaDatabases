@@ -124,81 +124,145 @@ jobs:
       # Name: ABUSECH_KEY
       # Téléchargement : HTTP/1.1 forcé (évite "HTTP/2 stream ... INTERNAL_ERROR"),
       # 3 tentatives, contrôle de taille minimale, sinon repli sur le cache.
-      # Borné : chaque essai dure au plus 4 min, l'étape au plus 10 min (budget interne) et 15 min (filet de
-      # sécurité). Un HTTP 429 (limite de débit) arrête les essais : insister prolonge le blocage. Dans tous les
-      # cas on retombe sur le cache, chargé dès le début.
+      # Incrémental, comme MalwareBazaar : le cache garde l'ensemble cumulé des sha256 (et les domaines du dernier
+      # full), chaque run ajoute recent.csv (48 h, petit). Le full (full.csv.zip, ou à défaut sha256_full.csv.zip)
+      # n'est téléchargé qu'à l'amorçage ou tous les 7 jours. Tout est borné dans le temps (essai 4 min, étape
+      # 10 min, arrêt de sécurité 20 min) et un HTTP 429 arrête les téléchargements du run : insister prolonge le
+      # blocage. Dans tous les cas on retombe sur le cache, chargé dès le début.
       - name: DATABASE PREPARATION - ThreatFox
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 20
         shell: bash
         env:
           ABUSECH_KEY: ${{ secrets.ABUSECH_KEY }}
           TF_MIN_LINES: "1000"
           TF_BUDGET_SECONDS: "600"
+          TF_FULL_EVERY_DAYS: "7"
+          TF_FULL_RETRY_DAYS: "1"
         run: |
           ws="${{ github.workspace }}"
           cdir="$ws/abusech-cache"
-          cfile="$cdir/threatfox.sha256.gz"
+          cfile="$cdir/threatfox.sha256.gz"      # cumulative sha256 (same file name as before)
+          dfile="$cdir/threatfox.domains.gz"     # domains of the last full dump (+ recents)
+          stamp="$cdir/threatfox.full_date"
+          tried="$cdir/threatfox.full_try"
           out="$ws/raw/threatfox.sha256"
-          dl="$ws/various/download_threatfox.zip"
-          mkdir -p "$ws/various/threatfox" "$cdir"
-          fresh=0
+          tmpd="$ws/various/threatfox"
+          base="https://threatfox-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}"
+          mkdir -p "$tmpd" "$cdir"
+          rm -rf "${tmpd:?}"/*
+
           # Copie de secours chargée d'avance : si l'étape est interrompue, elle reste en place
           if [ -s "$cfile" ]; then gunzip -c "$cfile" > "$out"; fi
+          if [ -s "$cfile" ]; then gunzip -c "$cfile" > "$tmpd/cache.sha"; else : > "$tmpd/cache.sha"; fi
+          if [ -s "$dfile" ]; then gunzip -c "$dfile" > "$tmpd/cache.dom"; else : > "$tmpd/cache.dom"; fi
+          prev=$(wc -l < "$tmpd/cache.sha")
+
+          deadline=$((SECONDS + TF_BUDGET_SECONDS))
+          RL=0   # passe à 1 après un HTTP 429 : on ne télécharge plus rien
+
+          fetch() { # $1=fichier distant  $2=destination ; 0 = fichier complet et valide
+            local f="$1" dl="$2" attempt code
+            [ "$RL" = 0 ] || return 2
+            for attempt in 1 2 3; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::warning::ThreatFox $f: time budget used up."
+                return 1
+              fi
+              rm -f "$dl"
+              code=$(curl -sSL --http1.1 --connect-timeout 20 --max-time 240 "$base/$f" -o "$dl" -w '%{http_code}') || code="000"
+              if [ "$code" = "429" ]; then
+                echo "::warning::ThreatFox $f: HTTP 429 (rate limited) - no more downloads in this run."
+                rm -f "$dl"; RL=1
+                return 2
+              fi
+              if [ "$code" = "200" ]; then
+                case "$f" in
+                  *.zip) if unzip -tq "$dl" >/dev/null 2>&1; then return 0; fi ;;
+                  *) if [ -s "$dl" ]; then return 0; fi ;;
+                esac
+              fi
+              echo "::warning::ThreatFox $f attempt $attempt failed (HTTP $code)."
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 30)); fi
+            done
+            return 1
+          }
+
+          csv_text() { if unzip -tq "$1" >/dev/null 2>&1; then unzip -p "$1"; else cat "$1"; fi; }
+          sha() { csv_text "$1" | grep sha256_hash | grep -oE '\b[a-fA-F0-9]{64}\b' | tr 'A-F' 'a-f' || true; }
+          sha_any() { csv_text "$1" | grep -oE '\b[a-fA-F0-9]{64}\b' | tr 'A-F' 'a-f' || true; }
+          # Domain/host IOCs too (the export CSV carries them alongside the hashes)
+          doms() {
+            csv_text "$1" | tr '[:upper:]' '[:lower:]' \
+              | grep -oE '\b([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b' \
+              | grep -vE '\.(csv|zip|txt|html?|php|asp|aspx|js|css|png|jpe?g|gif|svg|ico|pdf|xml|json)$' || true
+          }
+          age() { if [ -s "$1" ]; then echo $(( ( $(date +%s) - $(date -d "$(cat "$1")" +%s) ) / 86400 )); else echo 9999; fi; }
+
+          # Le full n'est téléchargé qu'à l'amorçage (cache vide) ou tous les TF_FULL_EVERY_DAYS jours ;
+          # les autres jours, recent.csv (48 h, petit) suffit.
+          need_full=0
+          if [ "$prev" -lt "$TF_MIN_LINES" ]; then
+            need_full=1
+          elif [ "$(age "$stamp")" -ge "$TF_FULL_EVERY_DAYS" ] && [ "$(age "$tried")" -ge "$TF_FULL_RETRY_DAYS" ]; then
+            need_full=1
+          fi
+          if [ "$need_full" = 1 ]; then date -u +%Y-%m-%d > "$tried"; fi
+
+          : > "$tmpd/full.sha"; : > "$tmpd/full.dom"; : > "$tmpd/recent.sha"; : > "$tmpd/recent.dom"
+          got_full=0; got_full_sha=0; got_recent=0
 
           if [ -z "$ABUSECH_KEY" ]; then
             echo "::warning::ABUSECH_KEY secret not set - cannot download ThreatFox."
           else
-            deadline=$((SECONDS + TF_BUDGET_SECONDS))
-            for attempt in 1 2 3; do
-              if [ "$SECONDS" -ge "$deadline" ]; then
-                echo "::warning::ThreatFox: time budget used up - using the cache."
-                break
+            if [ "$need_full" = 1 ]; then
+              if fetch full.csv.zip "$tmpd/full.zip"; then
+                sha "$tmpd/full.zip" | sort -u > "$tmpd/full.sha"
+                doms "$tmpd/full.zip" | sort -u > "$tmpd/full.dom"
+                if [ "$(wc -l < "$tmpd/full.sha")" -ge "$TF_MIN_LINES" ]; then got_full=1
+                else echo "::warning::ThreatFox full.csv.zip: only $(wc -l < "$tmpd/full.sha") hashes (expected >= $TF_MIN_LINES)."; fi
               fi
-              rm -f "$dl"; rm -rf "$ws/various/threatfox"/*
-              code=$(curl -sSL --http1.1 --connect-timeout 20 --max-time 240 \
-                   "https://threatfox-api.abuse.ch/v2/files/exports/${ABUSECH_KEY}/full.csv.zip" \
-                   -o "$dl" -w '%{http_code}') || code="000"
-              if [ "$code" = "429" ]; then
-                echo "::warning::ThreatFox: HTTP 429 (rate limited) - not retrying, using the cache."
-                break
+              # Repli : le full SHA256 seul (plus petit) si le full complet échoue ; les domaines restent alors ceux du cache
+              if [ "$got_full" = 0 ] && fetch sha256_full.csv.zip "$tmpd/sha_full.zip"; then
+                sha_any "$tmpd/sha_full.zip" | sort -u > "$tmpd/full.sha"
+                if [ "$(wc -l < "$tmpd/full.sha")" -ge "$TF_MIN_LINES" ]; then got_full_sha=1
+                else echo "::warning::ThreatFox sha256_full.csv.zip: only $(wc -l < "$tmpd/full.sha") hashes (expected >= $TF_MIN_LINES)."; fi
               fi
-              if [ "$code" = "200" ] \
-                 && unzip -tq "$dl" >/dev/null 2>&1 \
-                 && unzip -o -q "$dl" -d "$ws/various/threatfox/"; then
-                cat "$ws"/various/threatfox/*.csv \
-                  | grep sha256_hash \
-                  | grep -oE '\b[a-fA-F0-9]{64}\b' \
-                  | tr '[:upper:]' '[:lower:]' | sort -u \
-                  > "$out.tmp" || true
-                # Domain/host IOCs too (the export CSV carries them alongside the hashes)
-                cat "$ws"/various/threatfox/*.csv \
-                  | tr '[:upper:]' '[:lower:]' \
-                  | grep -oE '\b([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b' \
-                  | grep -vE '\.(csv|zip|txt|html?|php|asp|aspx|js|css|png|jpe?g|gif|svg|ico|pdf|xml|json)$' \
-                  | sort -u >> "$ws/various/domains-extra.txt" || true
-                n=$(wc -l < "$out.tmp")
-                if [ "$n" -ge "$TF_MIN_LINES" ]; then
-                  mv "$out.tmp" "$out"; fresh=1; break
-                fi
-                echo "::warning::ThreatFox attempt $attempt: only $n hashes (expected >= $TF_MIN_LINES)."
-              else
-                echo "::warning::ThreatFox download attempt $attempt failed (HTTP $code)."
-              fi
-              rm -f "$out.tmp"
-              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 30)); fi
-            done
+            fi
+            if fetch recent.csv "$tmpd/recent.csv"; then
+              sha "$tmpd/recent.csv" | sort -u > "$tmpd/recent.sha"
+              doms "$tmpd/recent.csv" | sort -u > "$tmpd/recent.dom"
+              got_recent=1
+            fi
           fi
 
-          if [ "$fresh" = 1 ]; then
-            gzip -c "$out" > "$cfile"
-            echo "ABUSECH_CACHE_UPDATED=1" >> "$GITHUB_ENV"
-            echo "ThreatFox: $(wc -l < "$out") sha256 signatures (fresh download, cache refreshed)."
-          elif [ -s "$cfile" ]; then
-            gunzip -c "$cfile" > "$out"
-            echo "::warning::ThreatFox download failed - using cached copy from $(date -u -r "$cfile" +%Y-%m-%d)."
-            echo "ThreatFox: $(wc -l < "$out") sha256 signatures (from cache)."
+          # Un full récupéré REMPLACE le cache (ThreatFox retire les IOC de plus de 6 mois) ; sinon on cumule.
+          if [ "$got_full" = 1 ] || [ "$got_full_sha" = 1 ]; then
+            sort -u "$tmpd/full.sha" "$tmpd/recent.sha" > "$out.tmp"
           else
+            sort -u "$tmpd/cache.sha" "$tmpd/recent.sha" > "$out.tmp"
+          fi
+          if [ "$got_full" = 1 ]; then
+            sort -u "$tmpd/full.dom" "$tmpd/recent.dom" > "$tmpd/final.dom"
+          else
+            sort -u "$tmpd/cache.dom" "$tmpd/recent.dom" > "$tmpd/final.dom"
+          fi
+
+          n=$(wc -l < "$out.tmp")
+          if [ "$n" -ge "$TF_MIN_LINES" ] && { [ "$got_full" = 1 ] || [ "$got_full_sha" = 1 ] || [ "$got_recent" = 1 ]; }; then
+            mv "$out.tmp" "$out"
+            gzip -c "$out" > "$cfile"
+            gzip -c "$tmpd/final.dom" > "$dfile"
+            cat "$tmpd/final.dom" >> "$ws/various/domains-extra.txt"
+            if [ "$got_full" = 1 ]; then date -u +%Y-%m-%d > "$stamp"; fi
+            echo "ABUSECH_CACHE_UPDATED=1" >> "$GITHUB_ENV"
+            echo "ThreatFox: $n sha256 signatures (+$((n - prev)); full=$got_full full_sha=$got_full_sha recent=$got_recent, cache refreshed), $(wc -l < "$tmpd/final.dom") domains."
+          elif [ "$prev" -ge "$TF_MIN_LINES" ]; then
+            rm -f "$out.tmp"; cp "$tmpd/cache.sha" "$out"
+            cat "$tmpd/cache.dom" >> "$ws/various/domains-extra.txt"
+            echo "::warning::ThreatFox download failed - using cached copy ($prev sha256, $(wc -l < "$tmpd/cache.dom") domains)."
+          else
+            rm -f "$out.tmp"
             echo "::warning::ThreatFox download failed and no cache available - skipping."
           fi
 
