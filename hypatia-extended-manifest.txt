@@ -1,0 +1,4 @@
+# Hypatia database manifest. Signed with the databases key.
+version=1
+sequence=1795688337
+hypatia-md5-extended-bloom.bin=eb11625ff121579f77b157318399111f829b6a54a5840ff10099b4a8d8de87f8
