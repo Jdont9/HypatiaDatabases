@@ -125,8 +125,9 @@ jobs:
       # Téléchargement : HTTP/1.1 forcé (évite "HTTP/2 stream ... INTERNAL_ERROR"),
       # 3 tentatives, contrôle de taille minimale, sinon repli sur le cache.
       # Incrémental, comme MalwareBazaar : le cache garde l'ensemble cumulé des sha256 (et les domaines du dernier
-      # full), chaque run ajoute recent.csv (48 h, petit). Le full (full.csv.zip, ou à défaut sha256_full.csv.zip)
-      # n'est téléchargé qu'à l'amorçage ou tous les 7 jours. Tout est borné dans le temps (essai 4 min, étape
+      # full), chaque run ajoute recent.csv (48 h, petit). Le full (full.csv.zip, puis full.json.zip si le CSV est
+      # inutilisable, puis sha256_full.csv.zip pour les seuls hash) n'est téléchargé qu'à l'amorçage ou tous les
+      # 7 jours ; recent.json remplace recent.csv s'il échoue. Tout est borné dans le temps (essai 4 min, étape
       # 10 min, arrêt de sécurité 20 min) et un HTTP 429 arrête les téléchargements du run : insister prolonge le
       # blocage. Dans tous les cas on retombe sur le cache, chargé dès le début.
       - name: DATABASE PREPARATION - ThreatFox
@@ -179,8 +180,13 @@ jobs:
               if [ "$code" = "200" ]; then
                 case "$f" in
                   *.zip) if unzip -tq "$dl" >/dev/null 2>&1; then return 0; fi ;;
+                  *.json) if head -c 1 "$dl" | grep -q '[{[]'; then return 0; fi ;;
                   *) if [ -s "$dl" ]; then return 0; fi ;;
                 esac
+              fi
+              if [ "$code" = "404" ]; then
+                echo "::warning::ThreatFox $f: not found (HTTP 404)."
+                return 1
               fi
               echo "::warning::ThreatFox $f attempt $attempt failed (HTTP $code)."
               if [ "$attempt" -lt 3 ]; then sleep $((attempt * 30)); fi
@@ -216,12 +222,18 @@ jobs:
             echo "::warning::ABUSECH_KEY secret not set - cannot download ThreatFox."
           else
             if [ "$need_full" = 1 ]; then
-              if fetch full.csv.zip "$tmpd/full.zip"; then
-                sha "$tmpd/full.zip" | sort -u > "$tmpd/full.sha"
-                doms "$tmpd/full.zip" | sort -u > "$tmpd/full.dom"
-                if [ "$(wc -l < "$tmpd/full.sha")" -ge "$TF_MIN_LINES" ]; then got_full=1
-                else echo "::warning::ThreatFox full.csv.zip: only $(wc -l < "$tmpd/full.sha") hashes (expected >= $TF_MIN_LINES)."; fi
-              fi
+              # Format CSV d'abord, puis JSON si le CSV est inutilisable (le JSON n'a pas de colonne : tous les
+              # SHA256 du texte sont repris, ce qui revient au même pour les hash)
+              for f in full.csv.zip full.json.zip; do
+                if fetch "$f" "$tmpd/full.dl"; then
+                  case "$f" in *json*) sha_any "$tmpd/full.dl" ;; *) sha "$tmpd/full.dl" ;; esac | sort -u > "$tmpd/full.sha"
+                  doms "$tmpd/full.dl" | sort -u > "$tmpd/full.dom"
+                  if [ "$(wc -l < "$tmpd/full.sha")" -ge "$TF_MIN_LINES" ]; then
+                    got_full=1; echo "ThreatFox: full dump read from $f."; break
+                  fi
+                  echo "::warning::ThreatFox $f: only $(wc -l < "$tmpd/full.sha") hashes (expected >= $TF_MIN_LINES)."
+                fi
+              done
               # Repli : le full SHA256 seul (plus petit) si le full complet échoue ; les domaines restent alors ceux du cache
               if [ "$got_full" = 0 ] && fetch sha256_full.csv.zip "$tmpd/sha_full.zip"; then
                 sha_any "$tmpd/sha_full.zip" | sort -u > "$tmpd/full.sha"
@@ -229,11 +241,13 @@ jobs:
                 else echo "::warning::ThreatFox sha256_full.csv.zip: only $(wc -l < "$tmpd/full.sha") hashes (expected >= $TF_MIN_LINES)."; fi
               fi
             fi
-            if fetch recent.csv "$tmpd/recent.csv"; then
-              sha "$tmpd/recent.csv" | sort -u > "$tmpd/recent.sha"
-              doms "$tmpd/recent.csv" | sort -u > "$tmpd/recent.dom"
-              got_recent=1
-            fi
+            for f in recent.csv recent.json; do
+              if fetch "$f" "$tmpd/recent.dl"; then
+                case "$f" in *json*) sha_any "$tmpd/recent.dl" ;; *) sha "$tmpd/recent.dl" ;; esac | sort -u > "$tmpd/recent.sha"
+                doms "$tmpd/recent.dl" | sort -u > "$tmpd/recent.dom"
+                got_recent=1; break
+              fi
+            done
           fi
 
           # Un full récupéré REMPLACE le cache (ThreatFox retire les IOC de plus de 6 mois) ; sinon on cumule.
